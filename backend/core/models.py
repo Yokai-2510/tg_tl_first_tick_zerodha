@@ -1,0 +1,299 @@
+"""
+Shared data structures. One definition per concept — no parallel shapes.
+
+Mutability is deliberate and documented per type:
+  * frozen  — immutable facts (Instrument, Signal, OrderResult, TickView)
+  * mutable — live state owned by exactly ONE thread (ArmedState, Position)
+
+Ownership (BUILD_SPEC P4 / R1):
+  ArmedState  -> websocket callback thread only
+  Position    -> position-monitor thread only
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date
+
+from .enums import (
+    ExitTrigger, InstrumentKind, OptionType, OrderRole, OrderStatus,
+    PositionStatus, RejectionKind, Side, SubscribeMode, TradingMode,
+)
+
+# --------------------------------------------------------------------------
+# Instruments
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class Instrument:
+    """One tradeable or observable contract. `token` is the primary key."""
+
+    token: int
+    tradingsymbol: str
+    exchange: str
+    underlying: str
+    kind: InstrumentKind
+    lot_size: int = 1
+    tick_size: float = 0.05
+    instrument_type: str | None = None       # CE | PE | EQ | FUT | None
+    strike: float = 0.0
+    expiry: date | None = None
+    is_index: bool = False
+    subscribe_mode: SubscribeMode = SubscribeMode.QUOTE
+    wave: int = 1                            # 1 = pre-open, 2 = post-settlement
+
+    @property
+    def is_option(self) -> bool:
+        return self.kind is InstrumentKind.OPTION
+
+    @property
+    def quote_key(self) -> str:
+        """Kite REST quote key, e.g. 'NFO:INDIGO26AUG5300PE'."""
+        return f"{self.exchange}:{self.tradingsymbol}"
+
+
+# --------------------------------------------------------------------------
+# Live market view
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class TickView:
+    """Immutable snapshot of the latest tick for one instrument.
+
+    Published by the feed thread; read by everyone else. Replaced wholesale
+    rather than mutated, so readers never see a half-updated view.
+    """
+
+    token: int
+    ltp: float = 0.0
+    bid: float = 0.0
+    ask: float = 0.0
+    volume: int = 0
+    oi: int = 0
+    exchange_ts_us: int | None = None
+    recv_us: int = 0
+    recv_ns: int = 0
+
+    @property
+    def has_depth(self) -> bool:
+        return self.bid > 0.0 and self.ask > 0.0
+
+    @property
+    def feed_lag_us(self) -> int | None:
+        """Broker/exchange dissemination delay. None when unknown.
+
+        May legitimately be negative if clocks are skewed — that is a clock
+        problem to surface, not a value to clamp.
+        """
+        if self.exchange_ts_us is None or self.recv_us <= 0:
+            return None
+        return self.recv_us - self.exchange_ts_us
+
+
+# --------------------------------------------------------------------------
+# Entry arming + signal
+# --------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class ArmedState:
+    """Per-instrument entry state. MUTABLE, owned by the websocket thread.
+
+    `fired` is a one-way latch (BUILD_SPEC R7): set exactly once, before the
+    signal leaves the callback, so a duplicate tick in the same batch cannot
+    produce a second entry.
+    """
+
+    instrument: Instrument
+    ref_price: float                 # options: previous close (R14)
+    lots: int
+    min_diff: float = 0.0
+    fired: bool = False
+
+    @property
+    def token(self) -> int:
+        return self.instrument.token
+
+    @property
+    def quantity(self) -> int:
+        return self.lots * self.instrument.lot_size
+
+
+@dataclass(frozen=True, slots=True)
+class Signal:
+    """An entry decision. Immutable once created."""
+
+    sig_id: str
+    token: int
+    tradingsymbol: str
+    underlying: str
+    option_type: str
+    strike: float
+    ref_price: float
+    tick_price: float
+    diff: float
+    best_bid: float
+    best_ask: float
+    lots: int
+    quantity: int
+    tick_size: float
+    exchange: str
+    is_index: bool
+    t_tick_ns: int
+    t_signal_ns: int
+    reason: str = "FIRST_POSITIVE_DIFF"
+
+
+# --------------------------------------------------------------------------
+# Orders
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class OrderResult:
+    """Outcome of one broker order call.
+
+    Expected broker conditions are returned, not raised — only genuinely
+    unexpected failures raise.
+    """
+
+    success: bool
+    order_id: str | None = None
+    error: str | None = None
+    rejection_kind: RejectionKind | None = None
+    lpp_limit: float | None = None
+    status: OrderStatus | None = None
+    filled_quantity: int = 0
+    average_price: float = 0.0
+    t_req_ns: int = 0
+    t_ack_ns: int = 0
+    raw: dict | None = None
+
+    @property
+    def ack_ms(self) -> float:
+        if self.t_req_ns <= 0 or self.t_ack_ns <= 0:
+            return -1.0
+        return (self.t_ack_ns - self.t_req_ns) / 1e6
+
+
+@dataclass(slots=True)
+class OrderRecord:
+    """Full audit trail for one order attempt. Appended to orders/*.jsonl."""
+
+    client_tag: str
+    role: OrderRole
+    side: Side
+    token: int
+    tradingsymbol: str
+    exchange: str
+    order_type: str
+    product: str
+    validity: str
+    quantity: int
+    price: float
+    attempt: int
+    order_id: str | None = None
+    sig_id: str | None = None
+    pos_id: str | None = None
+    status: OrderStatus | None = None
+    filled_quantity: int = 0
+    average_price: float = 0.0
+    status_message: str | None = None
+    rejection_kind: RejectionKind | None = None
+    price_basis: dict = field(default_factory=dict)
+    postbacks: list[dict] = field(default_factory=list)
+    t_req_ns: int = 0
+    t_ack_ns: int = 0
+    t_fill_ns: int = 0
+
+
+# --------------------------------------------------------------------------
+# Positions
+# --------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class PositionEntry:
+    order_id: str | None = None
+    price: float = 0.0
+    filled_qty: int = 0
+    at_us: int = 0
+    ref_price: float = 0.0
+    diff: float = 0.0
+
+
+@dataclass(slots=True)
+class PositionExit:
+    order_id: str | None = None
+    price: float = 0.0
+    filled_qty: int = 0
+    at_us: int = 0
+    trigger: ExitTrigger | None = None
+
+
+@dataclass(slots=True)
+class PositionLive:
+    ltp: float = 0.0
+    bid: float = 0.0
+    ask: float = 0.0
+    pnl: float = 0.0
+    pnl_pct: float = 0.0
+    max_pnl_pct: float = 0.0
+    min_pnl_pct: float = 0.0
+    holding_seconds: int = 0
+
+
+@dataclass(slots=True)
+class PositionTrailing:
+    """Trailing levels. Both ratchet upward only — never reset down."""
+
+    sl_active: bool = False
+    sl_peak: float = 0.0
+    sl_level: float = 0.0
+    tgt_active: bool = False
+    tgt_peak: float = 0.0
+    tgt_level: float = 0.0
+
+
+@dataclass(slots=True)
+class PositionFlags:
+    #: One-way latch preventing duplicate exit orders (BUILD_SPEC R8).
+    exiting: bool = False
+    broker_confirmed: bool = False
+    reconciled: bool = False
+
+
+@dataclass(slots=True)
+class Position:
+    """A live or closed position. MUTABLE, owned by the monitor thread."""
+
+    pos_id: str
+    instrument: Instrument
+    lots: int
+    quantity: int
+    mode: TradingMode
+    status: PositionStatus = PositionStatus.PENDING
+    sig_id: str | None = None
+    entry: PositionEntry = field(default_factory=PositionEntry)
+    exit: PositionExit = field(default_factory=PositionExit)
+    live: PositionLive = field(default_factory=PositionLive)
+    trailing: PositionTrailing = field(default_factory=PositionTrailing)
+    flags: PositionFlags = field(default_factory=PositionFlags)
+    charges: float = 0.0
+
+    @property
+    def token(self) -> int:
+        return self.instrument.token
+
+    @property
+    def tradingsymbol(self) -> str:
+        return self.instrument.tradingsymbol
+
+    @property
+    def is_open(self) -> bool:
+        return self.status in (PositionStatus.ACTIVE, PositionStatus.EXITING)
+
+
+__all__ = [
+    "Instrument", "TickView", "ArmedState", "Signal",
+    "OrderResult", "OrderRecord",
+    "PositionEntry", "PositionExit", "PositionLive", "PositionTrailing",
+    "PositionFlags", "Position",
+]
