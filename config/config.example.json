@@ -1,0 +1,165 @@
+{
+  "_doc": "TG/TL First-Tick system config. Copy to config.json. Every section documented inline. See docs/02_SYSTEM_DESIGN_AND_INTERFACES.md section 5.2 for the normative schema.",
+
+  "system": {
+    "_doc": "Process-level settings. All schedule times elsewhere are interpreted in this timezone.",
+    "timezone": "Asia/Kolkata",
+    "data_dir": "./data",
+    "log_level": "INFO",
+    "retention_days": 7
+  },
+
+  "schedule": {
+    "_doc": "Daily lifecycle. The service runs 24/7 under systemd and idles until phase1_time; there is nothing to launch manually.",
+    "phase1_time": "08:45:00",
+    "feed_connect_time": "08:55:00",
+    "preopen_start": "09:00:00",
+    "settlement_snapshot": "09:09:00",
+    "wave2_subscribe_time": "09:09:30",
+    "option_reference_time": "09:13:00",
+    "manual_cutoff": "09:14:00",
+    "trading_start": "09:15:00",
+    "eod_time": "15:28:00",
+    "auto_continue_daily": true
+  },
+
+  "broker": {
+    "_doc": "Kite Connect. product is per instrument class: stock options use NRML to avoid the MIS physical-settlement block; index options are cash-settled so MIS is fine. rate_limits mirror Kite's documented caps and are enforced locally.",
+    "api_key": "REPLACE_ME",
+    "product": { "stock_options": "NRML", "index_options": "MIS" },
+    "rate_limits": { "orders_per_sec": 10, "quote_per_sec": 1, "per_minute": 400, "daily_cap": 5000 },
+    "timeouts": { "order_ms": 3000, "quote_ms": 2000 },
+    "ws": { "reconnect_max_tries": 50, "reconnect_max_delay_s": 30 }
+  },
+
+  "trading_mode": {
+    "_doc": "'paper' places no broker orders and simulates fills at the touch. 'live' places real orders. Start with paper.",
+    "mode": "paper"
+  },
+
+  "universe": {
+    "_doc": "What to trade. candidate_buffer adds extra ranks either side of the cutoff: those chains are SUBSCRIBED but NOT traded, so a ranking shuffle near the open cannot leave us without a live chain. ranking_basis/atm_source use the 09:09 settlement price (options do not trade pre-open, so previous close is the option reference).",
+    "enabled": true,
+    "top_n_gainers": 5,
+    "top_n_losers": 5,
+    "candidate_buffer": 5,
+    "ranking_basis": "settlement",
+    "atm_source": "settlement",
+    "atm_fallback_chain": ["settlement", "futures_preopen", "prev_close"],
+    "rerank_on_open": false,
+    "subscribe_futures_preopen": false,
+    "indices": {
+      "NIFTY":     { "enabled": true,  "lots": 1, "strike_offset": 2 },
+      "BANKNIFTY": { "enabled": true,  "lots": 1, "strike_offset": 2 },
+      "SENSEX":    { "enabled": true,  "lots": 1, "strike_offset": 2 },
+      "FINNIFTY":  { "enabled": false, "lots": 1, "strike_offset": 2 }
+    },
+    "manual_instruments": [],
+    "per_symbol_overrides": {}
+  },
+
+  "instruments": {
+    "_doc": "Strike selection and subscription budgeting. expiry_roll: stock F&O is physically settled and Zerodha blocks fresh MIS buys in the last two trading days, so stocks roll to the next expiry; indices are cash-settled and never roll.",
+    "strike_reference": "ITM",
+    "strike_offset": 2,
+    "strikes_per_side": 4,
+    "subscription_soft_cap": 2400,
+    "subscribe_all_chains_early": false,
+    "expiry_roll": { "enabled": true, "buffer_trading_days": 1, "applies_to": "stocks_only" }
+  },
+
+  "snapshots": {
+    "_doc": "Reference captures. preopen_track records the whole equity auction continuously; settlement is the ranking and ATM basis; option_reference is the per-strike baseline for the diff trigger.",
+    "baseline":         { "enabled": true, "time": "08:55:00" },
+    "preopen_track":    { "enabled": true, "from": "09:00:00", "to": "09:08:00" },
+    "settlement":       { "enabled": true, "time": "09:09:00", "window_seconds": 60 },
+    "option_reference": { "enabled": true, "time": "09:13:00", "source": "prev_close" },
+    "market_open":      { "enabled": true, "time": "09:15:00", "window_seconds": 2 },
+    "eod":              { "enabled": true, "time": "15:30:15" }
+  },
+
+  "entry": {
+    "_doc": "min_diff 0.0 means 'first strictly positive tick'. fire_after_seconds avoids 09:15:00.000 being treated as an AMO. deadline_seconds stops a mid-day restart from firing stale entries. order_type MUST stay LIMIT for stock options -- Zerodha blocks MARKET there; order_fallback rescues the order if you set MARKET anyway.",
+    "min_diff": 0.0,
+    "fire_after_seconds": 1,
+    "deadline_seconds": 180,
+    "require_depth": true,
+    "min_premium": 0,
+    "max_premium": 0,
+    "entry_price_source": "ask",
+    "entry_slippage_pct": 1.5,
+    "entry_validity": "IOC",
+    "order_type": { "stock_options": "LIMIT", "index_options": "LIMIT" },
+    "order_fallback": {
+      "enabled": true,
+      "on": ["ORDER_TYPE_REJECT", "LPP_REJECT", "NO_DEPTH"],
+      "to": "MARKETABLE_LIMIT"
+    },
+    "lots_default": 1,
+    "max_notional_per_trade": 0,
+    "max_total_notional": 0,
+    "entry_retry": { "enabled": true, "max_attempts": 3, "interval_ms": 300 },
+    "limit_modification": { "enabled": true, "max_modifications": 3, "step_pct": 1.0 },
+    "lpp": { "retries": 3, "safety_factor": 0.99 }
+  },
+
+  "exits": {
+    "_doc": "Evaluated in priority order; first trigger wins. Each condition is independently toggleable. When trailing_target is enabled, the plain TARGET exit is suppressed and the position exits at max_extension_pct or on pullback instead.",
+    "stop_loss":        { "enabled": true,  "percentage": -5.0 },
+    "target":           { "enabled": true,  "percentage": 30.0 },
+    "trailing_stop":    { "enabled": true,  "activation_pct": 7.0, "trail_distance_pct": 3.0 },
+    "trailing_target":  { "enabled": false, "activation_pct": 15.0, "extend_distance_pct": 5.0, "max_extension_pct": 50.0 },
+    "time_exit":        { "enabled": false, "holding_seconds": 1200 },
+    "eod_exit":         { "enabled": true,  "square_off_time": "15:28:00" },
+    "manual_detection": { "enabled": true },
+    "monitor_interval_ms": 25,
+    "pnl_basis": "ltp",
+    "exit_price_source": "bid",
+    "exit_slippage_pct": 1.0,
+    "eod_slippage_pct": 3.0
+  },
+
+  "positions": {
+    "_doc": "max_per_symbol 1 prevents pyramiding. broker_sync polls the positions API to detect positions closed manually in the Kite app (there is no position stream on the websocket).",
+    "max_concurrent": 10,
+    "max_per_symbol": 1,
+    "broker_sync": { "enabled": true, "poll_interval_seconds": 2 }
+  },
+
+  "recorder": {
+    "_doc": "Full-depth tick capture from feed connect until the last position closes + post_exit_record_seconds. on_disk_full 'stop_recording' keeps trading and stops recording; 'halt_trading' does the opposite.",
+    "enabled": true,
+    "format": "ndjson",
+    "compression": "zstd",
+    "record_depth_levels": 5,
+    "flush_interval_ms": 500,
+    "post_exit_record_seconds": 300,
+    "retention_days": 7,
+    "max_disk_mb": 20000,
+    "on_disk_full": "stop_recording",
+    "upload": { "enabled": false, "target": "", "after": "eod" }
+  },
+
+  "alerts": {
+    "_doc": "Optional notifications. Leave disabled until you have a channel configured.",
+    "telegram": { "enabled": false, "bot_token": "", "chat_id": "" },
+    "email": { "enabled": false },
+    "on": ["PHASE_1_FAIL", "FEED_LOSS", "KILL_SWITCH", "ORDER_REJECT", "DISK_FULL"]
+  },
+
+  "api": {
+    "_doc": "Bind host to 127.0.0.1 when running behind Caddy (recommended) so the API is never directly exposed. cors_origins must list the exact frontend origins including Vercel preview hostnames. NEVER use '*' with a real auth_token.",
+    "host": "127.0.0.1",
+    "port": 8080,
+    "cors_origins": ["https://your-app.vercel.app", "http://localhost:5173"],
+    "auth_token": "REPLACE_ME_openssl_rand_hex_32",
+    "ws_push_interval_ms": 250
+  },
+
+  "paper": {
+    "_doc": "Paper-mode simulation. fill_model 'touch' fills at the ask we observed, capped at our limit -- what a marketable limit really gets.",
+    "starting_capital": 1000000,
+    "simulate_charges": true,
+    "fill_model": "touch"
+  }
+}

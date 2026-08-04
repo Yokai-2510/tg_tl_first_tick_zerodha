@@ -1,0 +1,26 @@
+[Unit]
+Description=TG/TL First-Tick Zerodha Trading System
+After=network-online.target chrony.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/firsttick
+Environment="PYTHONUNBUFFERED=1"
+Environment="TZ=Asia/Kolkata"
+ExecStart=/opt/firsttick/.venv/bin/python -u backend/main.py
+Restart=always
+RestartSec=10
+LimitNOFILE=65535
+StandardOutput=append:/opt/firsttick/logs/service.log
+StandardError=append:/opt/firsttick/logs/service.err
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/firsttick
+
+[Install]
+WantedBy=multi-user.target

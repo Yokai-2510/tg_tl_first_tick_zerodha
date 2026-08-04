@@ -1,0 +1,41 @@
+# Public HTTPS + WSS with NO domain purchase.
+#
+# sslip.io is a free public DNS service that resolves an IP encoded in the hostname:
+#     13-235-100-86.sslip.io  ->  13.235.100.86
+# Because it is a real DNS name, Let's Encrypt issues a genuine certificate for it,
+# so browsers get valid https:// AND wss:// with no security overrides.
+#
+# REQUIREMENTS
+#   1. Allocate and associate an ELASTIC IP. If the public IP changes, the hostname
+#      and the certificate both break.
+#   2. Security group: open 80 (ACME challenge + redirect) and 443. Keep 8080 CLOSED.
+#   3. The app must bind to 127.0.0.1:8080 (config api.host), not 0.0.0.0.
+#
+# Verify DNS before starting Caddy:
+#   dig +short 13-235-100-86.sslip.io      # must print your Elastic IP
+#
+# Install to /etc/caddy/Caddyfile, then: sudo systemctl reload caddy
+
+13-235-100-86.sslip.io {
+    encode zstd gzip
+
+    # Caddy upgrades WebSocket connections automatically -- no extra config needed.
+    reverse_proxy 127.0.0.1:8080 {
+        header_up X-Real-IP {remote_host}
+        flush_interval -1          # disable buffering: required for WS / streaming
+    }
+
+    log {
+        output file /var/log/caddy/firsttick.log
+        format json
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Alternative: you own a domain
+# ---------------------------------------------------------------------------
+# api.yourdomain.com {
+#     reverse_proxy 127.0.0.1:8080 {
+#         flush_interval -1
+#     }
+# }

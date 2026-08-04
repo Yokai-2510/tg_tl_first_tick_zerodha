@@ -1,0 +1,41 @@
+# ---- SECRETS — never commit ----
+config/credentials.json
+config/config.json
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+
+# ---- Runtime data ----
+data/
+logs/
+*.ndjson
+*.ndjson.zst
+*.jsonl
+access_token*
+*.session
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Instrument master cache ----
+*.json.gz
+master.json
+instruments_*.csv
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
