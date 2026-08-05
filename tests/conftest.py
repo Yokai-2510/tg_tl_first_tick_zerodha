@@ -98,3 +98,10 @@ def instrument() -> Instrument:
 @pytest.fixture
 def armed() -> ArmedState:
     return make_armed()
+
+
+@pytest.fixture
+def config_obj():
+    """The shipped example config, validated."""
+    from backend.config.loader import load
+    return load("config/config.example.json")
