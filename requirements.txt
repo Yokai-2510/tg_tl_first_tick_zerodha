@@ -23,6 +23,11 @@ loguru>=0.7.2
 python-dateutil>=2.9.0
 tzdata>=2024.1                 # ZoneInfo data on Windows
 
+# ---- Optional ----
+# upstox-python-sdk        # required only when data_broker = upstox
+# playwright               # required only for unattended Upstox login
+#                           (then: playwright install chromium)
+
 # ---- Dev / test ----
 pytest>=8.3.0
 pytest-asyncio>=0.24.0

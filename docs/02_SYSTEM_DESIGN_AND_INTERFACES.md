@@ -599,13 +599,39 @@ If a contract exists at the data broker but not at the trade broker,
 `BrokerPair.resolve()` **raises**. Guessing an order identifier is not an
 acceptable fallback.
 
+### Upstox authentication
+
+Ported from rank-momentum's production `brokers/upstox/auth.py`. Tokens die daily
+at 03:30 IST, and Upstox exposes **no headless auth endpoint** — the authorization
+code only appears on a browser redirect. Resolution order:
+
+1. cached token issued after the last 03:30 reset
+2. `credentials.upstox.access_token` you pasted in
+3. `credentials.upstox.auth_code` exchanged for a token
+4. **automated browser login**: mobile → TOTP → 6-digit PIN, 3 attempts with
+   backoff, failure screenshot each time
+
+Playwright is imported lazily, so it is required **only** for step 4:
+`pip install playwright && playwright install chromium`.
+
 ### Known asymmetry
 
 Kite delivers order updates on the **same** websocket, so fills land in
-milliseconds. Upstox needs a **separate portfolio stream**, which is not wired yet —
-`connect_order_stream()` returns `False` and the engine falls back to polling
-`order_state()`. Correct, but slower. Worth implementing before Upstox becomes the
-primary trade broker.
+milliseconds. Upstox needs a **separate portfolio stream**. That stream does not
+exist in the rank-momentum codebase either (verified: no `order_update` /
+portfolio-feed handler anywhere in it), so there was nothing to port —
+`connect_order_stream()` returns `False` and the engine polls `order_state()`
+instead. Correct, just slower. Worth building before Upstox becomes the primary
+trade broker.
+
+### Where this differs from rank-momentum, deliberately
+
+`tick_size`: rank-momentum stores the raw Upstox value (`instruments_manager.py`
+keeps `float(row["tick_size"])`, i.e. `5.0`) and never rounds prices to the tick
+grid — its limit prices are `round(price, 2)`. The bug is therefore latent there.
+**This system rounds every price to the instrument tick**, which the exchange
+requires, so the paise→rupee conversion is mandatory: with a raw `5.0`, a 158.00
+ask rounds to **165.00** instead of 160.40.
 
 ### Files
 

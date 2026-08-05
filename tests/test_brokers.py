@@ -415,3 +415,110 @@ def test_broker_selection_validates(tmp_path):
         parse(merge_patch(raw, {"broker": {"data_broker": "paper"}}))
     with pytest.raises(ConfigError, match="trade_broker"):
         parse(merge_patch(raw, {"broker": {"trade_broker": "finvasia"}}))
+
+
+# ======================= Upstox auth =======================
+
+def test_token_cache_freshness_spans_the_daily_reset():
+    from datetime import datetime, timedelta
+    from backend.brokers.upstox.auth import cache_is_fresh, last_reset_before
+    from backend.core.timeutil import IST
+
+    morning = datetime(2026, 8, 5, 9, 0, tzinfo=IST)      # after 03:30 reset
+    assert last_reset_before(morning) == datetime(2026, 8, 5, 3, 30, tzinfo=IST)
+    predawn = datetime(2026, 8, 5, 2, 0, tzinfo=IST)      # before it
+    assert last_reset_before(predawn) == datetime(2026, 8, 4, 3, 30, tzinfo=IST)
+
+    issued_today = {"access_token": "t",
+                    "issued_at": datetime(2026, 8, 5, 8, 0, tzinfo=IST).isoformat()}
+    assert cache_is_fresh(issued_today, now=morning) is True
+
+    # yesterday evening is STALE this morning even though it is only hours old
+    issued_yday = {"access_token": "t",
+                   "issued_at": datetime(2026, 8, 4, 20, 0, tzinfo=IST).isoformat()}
+    assert cache_is_fresh(issued_yday, now=morning) is False
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"access_token": ""}, {"access_token": "t"},
+    {"access_token": "t", "issued_at": "not-a-date"},
+    {"access_token": "t", "issued_at": None},
+])
+def test_cache_freshness_rejects_bad_payloads(payload):
+    from backend.brokers.upstox.auth import cache_is_fresh
+    assert cache_is_fresh(payload) is False
+
+
+def test_cache_round_trip(tmp_path):
+    from backend.brokers.upstox.auth import Session, read_cache, write_cache
+    path = tmp_path / "upstox_token.json"
+    write_cache(path, Session(access_token="abc", user_id="U1",
+                              issued_at="2026-08-05T08:00:00+05:30"))
+    assert read_cache(path)["access_token"] == "abc"
+    assert list(tmp_path.glob("*.tmp")) == []          # atomic write
+
+
+def test_auto_login_reports_missing_fields_precisely(monkeypatch):
+    """A partially filled credentials block must say WHICH fields are missing."""
+    import backend.brokers.upstox.auth as uauth
+    from backend.brokers.base import BrokerError
+
+    # pretend playwright is importable so we reach the credential check
+    import sys, types
+    stub = types.ModuleType("playwright.sync_api")
+    stub.sync_playwright = lambda: None
+    monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", stub)
+
+    with pytest.raises(BrokerError) as exc:
+        uauth.fetch_auth_code({"api_key": "k", "api_secret": "s",
+                               "redirect_uri": "https://x"})
+    msg = str(exc.value)
+    assert "mobile_no" in msg and "totp_key" in msg and "pin" in msg
+
+
+def test_login_falls_back_through_the_chain(tmp_path, monkeypatch):
+    """cache -> access_token -> auth_code -> browser, in that order."""
+    import backend.brokers.upstox.auth as uauth
+    from backend.brokers.upstox.auth import Session, login
+
+    monkeypatch.setattr(uauth, "verify",
+                        lambda tok, timeout=10.0: {"user_id": "U1", "user_name": "V"})
+
+    # 2. configured access_token wins when there is no cache
+    s = login({"access_token": "pasted"}, cache_path=tmp_path / "tok.json")
+    assert s.access_token == "pasted"
+
+    # 1. now the cache short-circuits it
+    s2 = login({"access_token": "different"}, cache_path=tmp_path / "tok.json")
+    assert s2.access_token == "pasted"
+
+
+def test_login_uses_auth_code_before_opening_a_browser(tmp_path, monkeypatch):
+    import backend.brokers.upstox.auth as uauth
+    from backend.brokers.upstox.auth import Session, login
+
+    called = []
+    monkeypatch.setattr(uauth, "verify", lambda *a, **k: None)
+    monkeypatch.setattr(uauth, "exchange_code",
+                        lambda **kw: Session(access_token="from-code",
+                                             issued_at="2026-08-05T09:00:00+05:30"))
+    monkeypatch.setattr(uauth, "fetch_auth_code",
+                        lambda *a, **k: called.append("browser") or "CODE")
+
+    s = login({"api_key": "k", "api_secret": "s", "redirect_uri": "https://x",
+               "auth_code": "SUPPLIED"}, cache_path=tmp_path / "tok.json")
+    assert s.access_token == "from-code"
+    assert called == [], "auth_code was supplied; the browser must not open"
+
+
+def test_login_error_lists_every_option(tmp_path, monkeypatch):
+    import backend.brokers.upstox.auth as uauth
+    from backend.brokers.base import BrokerError
+    from backend.brokers.upstox.auth import login
+
+    monkeypatch.setattr(uauth, "verify", lambda *a, **k: None)
+    with pytest.raises(BrokerError) as exc:
+        login({}, cache_path=tmp_path / "tok.json", auto=False)
+    msg = str(exc.value)
+    assert "access_token" in msg and "auth_code" in msg and "totp_key" in msg
