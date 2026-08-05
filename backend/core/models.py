@@ -26,7 +26,19 @@ from .enums import (
 
 @dataclass(frozen=True, slots=True)
 class Instrument:
-    """One tradeable or observable contract. `token` is the primary key."""
+    """One tradeable or observable contract.
+
+    `token` is the ENGINE's primary key and is derived from the DATA broker,
+    because that is what arrives on every tick. `data_key` and `trade_key` hold
+    each broker's native identifier, which differ in both format and value:
+
+        Kite    instrument_token  1234567          -> "1234567"
+        Upstox  instrument_key    "NSE_FO|49520"
+
+    When data and trading use different brokers, `trade_key` is resolved by
+    matching the exchange-level contract identity (underlying, expiry, strike,
+    option type) rather than the tradingsymbol, whose format is broker-specific.
+    """
 
     token: int
     tradingsymbol: str
@@ -34,13 +46,15 @@ class Instrument:
     underlying: str
     kind: InstrumentKind
     lot_size: int = 1
-    tick_size: float = 0.05
+    tick_size: float = 0.05                  # ALWAYS rupees (Upstox reports paise)
     instrument_type: str | None = None       # CE | PE | EQ | FUT | None
     strike: float = 0.0
     expiry: date | None = None
     is_index: bool = False
     subscribe_mode: SubscribeMode = SubscribeMode.QUOTE
     wave: int = 1                            # 1 = pre-open, 2 = post-settlement
+    data_key: str = ""                       # native id at the data broker
+    trade_key: str = ""                      # native id at the trade broker
 
     @property
     def is_option(self) -> bool:
@@ -50,6 +64,12 @@ class Instrument:
     def quote_key(self) -> str:
         """Kite REST quote key, e.g. 'NFO:INDIGO26AUG5300PE'."""
         return f"{self.exchange}:{self.tradingsymbol}"
+
+    @property
+    def contract_id(self) -> tuple:
+        """Broker-independent identity, for cross-broker matching."""
+        return (self.underlying.upper(), self.expiry, round(self.strike, 2),
+                (self.instrument_type or "").upper())
 
 
 # --------------------------------------------------------------------------

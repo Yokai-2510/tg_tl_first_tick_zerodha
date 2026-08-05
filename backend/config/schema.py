@@ -108,11 +108,40 @@ class ProductCfg(_Base):
 
 
 class BrokerCfg(_Base):
+    """Data and trading brokers are chosen INDEPENDENTLY.
+
+    `data_broker`  : zerodha | upstox   — feed, instrument master, quotes
+    `trade_broker` : zerodha | upstox | paper — orders and the position book
+
+    Splitting them is useful in practice: running data on Upstox with
+    `trade_broker: paper` touches no Zerodha API key at all, so it cannot
+    disturb another system already using that key.
+    """
+
+    data_broker: str = "zerodha"
+    trade_broker: str = "zerodha"
     api_key: str = ""
     product: ProductCfg = Field(default_factory=ProductCfg)
     rate_limits: RateLimitsCfg = Field(default_factory=RateLimitsCfg)
     timeouts: TimeoutsCfg = Field(default_factory=TimeoutsCfg)
     ws: WsCfg = Field(default_factory=WsCfg)
+
+    @field_validator("data_broker")
+    @classmethod
+    def _data_supported(cls, v: str) -> str:
+        value = v.strip().lower()
+        if value not in ("zerodha", "upstox"):
+            raise ValueError(f"data_broker must be zerodha or upstox, got {v!r}")
+        return value
+
+    @field_validator("trade_broker")
+    @classmethod
+    def _trade_supported(cls, v: str) -> str:
+        value = v.strip().lower()
+        if value not in ("zerodha", "upstox", "paper"):
+            raise ValueError(
+                f"trade_broker must be zerodha, upstox or paper, got {v!r}")
+        return value
 
 
 class TradingModeCfg(_Base):

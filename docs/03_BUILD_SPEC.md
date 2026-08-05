@@ -14,7 +14,7 @@ pseudocode, edge cases, and test vectors with exact expected values.
 
 ---
 
-## 0. The 15 absolute rules
+## 0. The 18 absolute rules
 
 Violating any of these is a bug, even if tests pass.
 
@@ -35,6 +35,9 @@ Violating any of these is a bug, even if tests pass.
 | **R13** | **Interim order statuses are not terminal.** Only `COMPLETE`, `REJECTED`, `CANCELLED` end the lifecycle. | `OPEN PENDING`, `VALIDATION PENDING` etc. arrive first. |
 | **R14** | **Reference price for options = previous close.** Options do not trade pre-open. | Section 5.2 of the plan. |
 | **R15** | **Reconcile with the broker before arming** after any restart. | Prevents duplicate positions. |
+| **R16** | **Upstox `tick_size` is PAISE.** Divide by 100 before any price maths. | 5.0 used raw rounds a 158.00 ask to 165.00 instead of 160.40. |
+| **R17** | **Upstox `expiry` is epoch MILLISECONDS**, not a date. | Silently breaks the expiry roll. |
+| **R18** | **Match contracts across brokers on `(underlying, expiry, strike, type)`**, never the tradingsymbol. | `INDIGO26AUG5300PE` vs `INDIGO 26 AUG 5300 PE`. |
 
 ---
 
@@ -145,6 +148,62 @@ def resolve_expiry(symbol, expiries_sorted, today, cfg) -> date:
 
 ⚠️ **Known limitation:** `busday_count` handles weekends, not exchange holidays. Phase 1 must
 cross-check against the market-calendar and log a warning on disagreement.
+
+---
+
+## 3A. Multi-broker normalisation
+
+`data_broker` and `trade_broker` are independent (zerodha | upstox, plus `paper`
+for trading). Every adapter converts to the canonical shapes in
+`backend/brokers/base.py`; the engine has **no** broker conditionals.
+
+```python
+def paise_to_rupees(tick_size) -> float:
+    v = float(tick_size or 0)
+    if v <= 0:
+        return 0.05
+    return round(v / 100.0, 4) if v >= 1 else round(v, 4)   # >=1 means paise
+```
+
+**Test vectors:**
+
+| Upstox `tick_size` | Canonical | Note |
+|---|---|---|
+| 5.0 | **0.05** | the trap |
+| 10.0 | 0.10 | |
+| 100.0 | 1.00 | |
+| 0.05 | 0.05 | already rupees, unchanged |
+| 0 / None | 0.05 | safe default |
+
+| Upstox `expiry` | Canonical |
+|---|---|
+| 1787616000000 | `date(2026, 8, 25)` |
+| 0 / None / "" | `None` |
+
+**Status normalisation** — `normalise_status()` maps every broker spelling onto the
+canonical vocabulary before `is_terminal()` is consulted:
+
+| Raw | Canonical |
+|---|---|
+| `complete`, `completed`, `filled` | `COMPLETE` |
+| `cancelled`, `canceled` | `CANCELLED` |
+| `  Open   Pending  ` | `OPEN PENDING` (not terminal) |
+
+**Product mapping:**
+
+| Canonical | Kite | Upstox |
+|---|---|---|
+| stock options | `NRML` | `D` (intraday not offered — physically settled) |
+| index options | `MIS` | `I` |
+
+**Instrument identity.** `token` is the engine PK and comes from the DATA broker.
+String-keyed brokers get `surrogate_token(key)` — a deterministic 56-bit blake2b
+digest, stable across restarts so recorded tick files stay readable. A 32-bit CRC
+would collide at ~77k instruments; verified collision-free across 50k keys.
+
+**Cross-broker resolution.** `BrokerPair.resolve()` attaches `trade_key` by matching
+`contract_id`. If the contract is absent at the trade broker it **raises** —
+never guess an order identifier.
 
 ---
 

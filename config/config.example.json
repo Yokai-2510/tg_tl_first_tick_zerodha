@@ -24,7 +24,9 @@
   },
 
   "broker": {
-    "_doc": "Kite Connect. product is per instrument class: stock options use NRML to avoid the MIS physical-settlement block; index options are cash-settled so MIS is fine. rate_limits mirror Kite's documented caps and are enforced locally.",
+    "_doc": "Broker selection + order settings. data_broker (zerodha|upstox) supplies the feed, instrument master and quotes; trade_broker (zerodha|upstox|paper) places orders. They are INDEPENDENT -- data on upstox with trade_broker=paper touches no Zerodha key at all. product is per instrument class: stock options use NRML to avoid the MIS physical-settlement block; index options are cash-settled so MIS is fine. rate_limits mirror Kite's documented caps and are enforced locally.",
+    "data_broker": "zerodha",
+    "trade_broker": "zerodha",
     "api_key": "REPLACE_ME",
     "product": { "stock_options": "NRML", "index_options": "MIS" },
     "rate_limits": { "orders_per_sec": 10, "quote_per_sec": 1, "per_minute": 400, "daily_cap": 5000 },

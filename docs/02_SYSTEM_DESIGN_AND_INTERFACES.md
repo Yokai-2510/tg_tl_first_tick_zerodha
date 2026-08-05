@@ -542,6 +542,82 @@ stats() -> dict
 
 ---
 
+## 6A. Multi-broker: data and trading are chosen independently
+
+**`data_broker`** (zerodha | upstox) supplies the live feed, the instrument master
+and REST quotes. **`trade_broker`** (zerodha | upstox | paper) places orders and owns
+the position book. They are set separately in `config.broker`.
+
+```jsonc
+"broker": { "data_broker": "zerodha", "trade_broker": "zerodha" }   // default
+"broker": { "data_broker": "upstox",  "trade_broker": "paper"    }   // isolated testing
+"broker": { "data_broker": "upstox",  "trade_broker": "zerodha" }   // split
+```
+
+> **Why the split earns its keep:** running `data_broker: upstox` with
+> `trade_broker: paper` touches **no Zerodha API key at all**, so it cannot disturb
+> another system already using that key — no shared websocket count, no shared
+> quote quota, no shared session.
+
+### The contract every adapter satisfies
+
+`backend/brokers/base.py` defines `DataBroker` and `TradeBroker` protocols plus the
+**canonical shapes**. Adapters translate; the engine contains **zero** broker
+conditionals.
+
+| Concern | Kite (Zerodha) | Upstox | Canonical form |
+|---|---|---|---|
+| Instrument id | `instrument_token` int | `instrument_key` str `NSE_FO\|49520` | `Instrument.token` int + `data_key` / `trade_key` |
+| **tick_size** | `0.05` rupees | **`5.0` paise** | **always rupees** |
+| **expiry** | `date` | **epoch milliseconds** | `date` |
+| Product | `MIS` / `NRML` | **`I` / `D`** | canonical names, mapped per adapter |
+| Order status | `COMPLETE`, `OPEN PENDING` | lowercase `complete` | `normalise_status()` → canonical |
+| Tick shape | flat + `depth.buy/sell` | nested `fullFeed.marketFF` | flat Kite-shaped dict |
+| Order updates | **same websocket** | **separate portfolio stream** | `connect_order_stream()` → bool |
+
+Two conversions are load-bearing and unit-tested with the failure they prevent:
+`tick_size` 5.0 → 0.05 (unconverted, a 158.00 ask rounds to **165.00** instead of
+160.40), and epoch-ms → `date`.
+
+### Instrument identity across brokers
+
+`Instrument.token` is the engine's primary key and comes from the **data** broker,
+because that is what every tick carries. String-keyed brokers get a deterministic
+56-bit surrogate (`surrogate_token`), stable across restarts so recorded tick files
+stay readable.
+
+When the two brokers differ, `trade_key` is resolved by matching the
+**exchange-level contract identity** — `(underlying, expiry, strike, option_type)` —
+never the tradingsymbol, because the formats differ:
+
+```
+Kite    INDIGO26AUG5300PE
+Upstox  INDIGO 26 AUG 5300 PE
+```
+
+If a contract exists at the data broker but not at the trade broker,
+`BrokerPair.resolve()` **raises**. Guessing an order identifier is not an
+acceptable fallback.
+
+### Known asymmetry
+
+Kite delivers order updates on the **same** websocket, so fills land in
+milliseconds. Upstox needs a **separate portfolio stream**, which is not wired yet —
+`connect_order_stream()` returns `False` and the engine falls back to polling
+`order_state()`. Correct, but slower. Worth implementing before Upstox becomes the
+primary trade broker.
+
+### Files
+
+```
+brokers/base.py            protocols, canonical shapes, status + token normalisation
+brokers/registry.py        factory, BrokerPair, cross-broker contract resolution
+brokers/kite/adapter.py    Zerodha: both roles
+brokers/upstox/            auth, instruments, feed, orders, adapter
+```
+
+---
+
 ## 7. Frontend REST API
 
 ### 7.1 Conventions

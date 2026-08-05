@@ -24,6 +24,10 @@ premium difference** against a pre-open reference.
   Each independently toggleable with its own values.
 - **Paper / live** is a single config switch. Everything else is configurable too.
 - **Backend only.** The frontend is a separate client consuming REST + WebSocket.
+- **Broker-agnostic.** `data_broker` (zerodha | upstox) and `trade_broker`
+  (zerodha | upstox | paper) are chosen **independently** in config. Running data on
+  Upstox with `trade_broker: paper` touches no Zerodha key at all — the clean way to
+  test alongside a system already using that key.
 
 ## Three facts that shaped the design
 
@@ -44,7 +48,7 @@ premium difference** against a pre-open reference.
 |---|---|---|
 | 1 | [Implementation Plan](docs/01_IMPLEMENTATION_PLAN.md) | **Why** — objective, verified broker/exchange facts, latency strategy, build phases, size budget |
 | 2 | [System Design & Interfaces](docs/02_SYSTEM_DESIGN_AND_INTERFACES.md) | **What** — architecture, modules, data schemas, broker facade, REST + WebSocket APIs |
-| 3 | [Build Spec](docs/03_BUILD_SPEC.md) | **How** — 15 absolute rules, algorithms, test vectors, anti-patterns |
+| 3 | [Build Spec](docs/03_BUILD_SPEC.md) | **How** — 18 absolute rules, algorithms, test vectors, anti-patterns |
 | 4 | [Developer Setup Guide](docs/04_DEVELOPER_SETUP_GUIDE.md) | **Where** — EC2, network, systemd, HTTPS without a domain, Vercel wiring, ops |
 
 **Conflict rule:** for implementation details, the Build Spec wins.
