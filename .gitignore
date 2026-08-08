@@ -8,8 +8,10 @@ config/config.json
 !.env.example
 
 # ---- Runtime data ----
-data/
-logs/
+# Anchored with a leading slash: an unanchored "data/" also matches
+# backend/data/, which silently excluded that whole package from the repo.
+/data/
+/logs/
 *.ndjson
 *.ndjson.zst
 *.jsonl
