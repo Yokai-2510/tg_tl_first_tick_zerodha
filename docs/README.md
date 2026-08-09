@@ -7,6 +7,7 @@ Read in this order.
 | 1 | [01_IMPLEMENTATION_PLAN.md](01_IMPLEMENTATION_PLAN.md) | **Why** — objective, verified broker/exchange facts, what we adopt & drop from the rank-momentum codebase, latency strategy, build phases, size budget | deciding scope or reviewing the approach |
 | 2 | [02_SYSTEM_DESIGN_AND_INTERFACES.md](02_SYSTEM_DESIGN_AND_INTERFACES.md) | **What** — architecture, thread model, module boundaries, every data schema, broker facade, REST + WebSocket APIs, frontend connection contract | building the backend or the frontend |
 | 3 | [03_BUILD_SPEC.md](03_BUILD_SPEC.md) | **How** — 18 absolute rules, exact algorithms with pseudocode, test vectors with expected values, anti-patterns, implementation order | writing the code |
+| 5 | [05_FRONTEND_BRIEF.md](05_FRONTEND_BRIEF.md) | **Frontend** — design direction, live connection details, every endpoint with real captured payloads, WS protocol, page-by-page data mapping | building the operator console |
 | 4 | [04_DEVELOPER_SETUP_GUIDE.md](04_DEVELOPER_SETUP_GUIDE.md) | **Where** — EC2 provisioning, network/security groups, systemd, public HTTPS without buying a domain, Vercel wiring, ops & troubleshooting | deploying or operating it |
 
 **Conflict rule:** for implementation details, `03_BUILD_SPEC.md` wins.
