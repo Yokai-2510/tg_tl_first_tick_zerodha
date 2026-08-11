@@ -97,6 +97,7 @@ class Application:
             Phase.TRADING: self.start_trading,
             Phase.EOD: self.square_off,
         }
+        self.scheduler.on_reset = self.reset_session
         self.book.on_change = self._on_position_change
         self.feed.on_signal = self._on_signal
 
@@ -150,6 +151,12 @@ class Application:
         """08:55 — open the single websocket, subscribe wave 1, start recording."""
         from .brokers.kite.ticker import KiteFeed
 
+        if self.kfeed is not None:          # never leak a previous day's socket
+            try:
+                self.kfeed.close()
+            except Exception:
+                pass
+            self.kfeed = None
         self.recorder.start()
         stocks = [i for i in (kinst.equity_instrument(self.master["NSE"], s)
                               for s in self.nifty50) if i is not None]
@@ -362,6 +369,47 @@ class Application:
             "server_time": now_ist().isoformat(),
         }
 
+    def reset_session(self) -> None:
+        """Tear down a finished session so the next day starts clean.
+
+        Called by the scheduler when it returns to IDLE. Everything rebuilt by
+        phase1/connect_feed/arm_wave2 is dropped here; anything that survives a
+        day (config, credentials, position history on disk) is left alone.
+        """
+        self.log.info("session reset — clearing feed, universe and arming state")
+        if self.kfeed is not None:
+            try:
+                self.kfeed.close()
+            except Exception:
+                pass
+            self.kfeed = None
+        try:
+            self.recorder.stop()
+        except Exception:
+            pass
+        self.feed.reset()
+        self.instruments.clear()
+        self.by_symbol.clear()
+        self.settlement = {}
+        self.shortlist = None
+        self.subscribed_count = 0
+        self.master = {}
+        self._halted = False
+        # A new recorder so tomorrow writes into tomorrow's dated directory.
+        self.recorder = Recorder(
+            Path(self.cfg.system.data_dir),
+            enabled=self.cfg.recorder.enabled,
+            compression=self.cfg.recorder.compression,
+            depth_levels=self.cfg.recorder.record_depth_levels,
+            flush_interval_ms=self.cfg.recorder.flush_interval_ms,
+            max_disk_mb=self.cfg.recorder.max_disk_mb,
+            on_disk_full=str(self.cfg.recorder.on_disk_full),
+        )
+        self.feed.recorder = self.recorder
+        self.scheduler.recorder = self.recorder
+        if self.executor is not None:
+            self.executor.recorder = self.recorder
+
     def refresh_capital(self) -> None:
         """Cache the broker capital view. Safe to call from any background thread."""
         if self.kite is None or self.cfg.trading_mode.mode is TradingMode.PAPER:
@@ -547,6 +595,15 @@ class Application:
                             "at": now_ist().isoformat()})
         if state in ("RECONNECT", "CLOSED"):
             self.recorder.event("FEED_GAP", payload)
+        if state == "NORECONNECT":
+            # The socket exhausted its retry budget. Entries cannot fire without a
+            # feed, so disarm rather than sit armed against stale prices. Exits keep
+            # running on the REST path, and the daily reset builds a fresh socket.
+            self.feed.disarm()
+            self.log.error(
+                "FEED gave up reconnecting — entries disarmed. Exits still managed "
+                "via REST; a fresh socket is built at the next session."
+            )
         self.log.info(f"FEED {state} {payload}")
 
     # ================= helpers =================

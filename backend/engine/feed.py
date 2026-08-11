@@ -90,6 +90,22 @@ class Feed:
     def disarm(self) -> None:
         self.entries_enabled = False
 
+    def reset(self) -> None:
+        """Clear a finished session so tomorrow starts from nothing.
+
+        Without this the arming table keeps yesterday's `fired` latches and stale
+        reference prices, and every instrument would look already-traded.
+        """
+        with self._lock:
+            self.entries_enabled = False
+            self._armed.clear()
+            self._last.clear()
+            self._symbols.clear()
+            self._sig_seq = 0
+            self.signals_fired = 0
+            self.ticks_seen = 0
+            self.phase = Phase.IDLE
+
     def enable_entries(
         self, *, fire_after_ns: int, deadline_ns: int, session_prefix: str
     ) -> None:
