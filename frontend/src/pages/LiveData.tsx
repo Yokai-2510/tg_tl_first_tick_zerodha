@@ -239,7 +239,9 @@ function TicksTable() {
       .filter((r) => {
         const sym = r.sym ?? ''
         if (needle && !sym.includes(needle)) return false
-        const isOpt = sym.endsWith('CE') || sym.endsWith('PE')
+        // A suffix test is WRONG here: BAJFINANCE ends in "CE". An option's
+        // tradingsymbol always differs from its underlying; an equity's does not.
+        const isOpt = !!r.underlying && sym !== r.underlying
         if (kind === 'options') return isOpt
         if (kind === 'equity') return !isOpt
         return true
