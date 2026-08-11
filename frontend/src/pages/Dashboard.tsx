@@ -4,6 +4,7 @@ import {
   bytes, duration, int, money, pct, price, seconds, signClass, timeFromIso, DASH,
 } from '../lib/format'
 import { Card, KV, PhaseTimeline, Section, Stat, Table } from '../components/ui'
+import CapitalCard from '../components/CapitalCard'
 
 export default function Dashboard() {
   const status = useStore((s) => s.status)
@@ -30,7 +31,11 @@ export default function Dashboard() {
               hint="Instruments watched for a first positive tick" />
         <Stat label="Signals" value={int(status.engine.signals)}
               sub={`${status.engine.intent_queue} queued`} />
-        <Stat label="Charges" value={money(p.charges)} sub="simulated in paper" />
+        <Stat label="Capital free" value={money(status.capital?.available)}
+              sub={status.capital
+                ? `${pct(status.capital.deployed_pct, { sign: false })} deployed`
+                : 'unknown'}
+              hint="Available margin at the broker" />
       </div>
 
       <div className="grid gap-5 lg:grid-cols-3">
@@ -64,6 +69,8 @@ export default function Dashboard() {
         </div>
 
         <div className="space-y-3">
+          <CapitalCard cap={status.capital} />
+
           <Card label="Market feed">
             <KV k="Connection" v={status.feed.connected ? 'Connected' : 'Disconnected'}
                 tone={status.feed.connected ? 'text-pos' : 'text-neg'} />

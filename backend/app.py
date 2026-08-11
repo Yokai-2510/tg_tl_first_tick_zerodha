@@ -78,6 +78,9 @@ class Application:
         self.by_symbol: dict[str, Any] = {}
         self.subscribed_count = 0
 
+        #: Cached broker capital. Refreshed on the sync thread — margins is a REST
+        #: call and must never run inside an API request.
+        self.capital: dict = {}
         self.events: list[dict] = []
         self.logs: list[dict] = []
         self.signals: list[dict] = []
@@ -134,6 +137,7 @@ class Application:
             )
         self.log.info(f"preflight ok — projected {projected} instruments (cap {cap})")
 
+        self.refresh_capital()
         prune_old_sessions(self.cfg.system.data_dir, self.cfg.recorder.retention_days)
         self.executor = Executor(
             kite=self.kite, cfg=self.cfg, book=self.book, feed=self.feed,
@@ -318,6 +322,7 @@ class Application:
                 continue
             try:
                 self.reconcile_now()
+                self.refresh_capital()
             except Exception as exc:
                 self.log.error(f"broker sync: {exc}")
 
@@ -351,9 +356,36 @@ class Application:
             "engine": self.feed.stats(),
             "recorder": self.recorder.stats(),
             "positions": self.book.summary(),
+            "capital": self.capital or self._paper_capital(),
             "rate_limits": self.limiter.stats(),
             "ws_clients": self.hub.client_count,
             "server_time": now_ist().isoformat(),
+        }
+
+    def refresh_capital(self) -> None:
+        """Cache the broker capital view. Safe to call from any background thread."""
+        if self.kite is None or self.cfg.trading_mode.mode is TradingMode.PAPER:
+            self.capital = self._paper_capital()
+            return
+        try:
+            self.capital = kportfolio.capital(
+                kportfolio.margins(self.kite, limiter=self.limiter))
+        except Exception as exc:
+            self.log.error(f"capital refresh failed: {exc}")
+
+    def _paper_capital(self) -> dict:
+        """Simulated capital so the console shows the same shape in paper mode."""
+        start = float(self.cfg.paper.starting_capital)
+        used = round(sum(p.entry.price * p.quantity for p in self.book.open_positions()), 2)
+        realised = self.book.summary()["realised"]
+        total = round(start + realised, 2)
+        return {
+            "available": round(total - used, 2), "used": used, "total": total,
+            "deployed_pct": round((used / total) * 100, 2) if total > 0 else 0.0,
+            "opening_balance": start, "payin": 0.0, "net": total,
+            "breakdown": {"debits": used, "span": 0.0, "exposure": 0.0,
+                          "option_premium": used},
+            "simulated": True,
         }
 
     def universe_payload(self) -> dict:
@@ -370,10 +402,16 @@ class Application:
         if not self.shortlist:
             return {"ranked": []}
         tradeable = set(self.shortlist.tradeable)
+        buffer = set(self.shortlist.buffer)
         return {"ranked": [
             {"rank": r.rank_gainer, "symbol": r.symbol, "ltp": r.ltp,
              "prev_close": r.prev_close, "change_pct": r.change_pct,
-             "selected": r.symbol in tradeable}
+             "volume": int((self.settlement.get(r.symbol) or {}).get("volume") or 0),
+             "open": float((self.settlement.get(r.symbol) or {}).get("open") or 0.0),
+             "high": float((self.settlement.get(r.symbol) or {}).get("high") or 0.0),
+             "low": float((self.settlement.get(r.symbol) or {}).get("low") or 0.0),
+             "selected": r.symbol in tradeable,
+             "buffer": r.symbol in buffer}
             for r in self.shortlist.gainers
         ]}
 
@@ -383,7 +421,9 @@ class Application:
             inst = self.instruments.get(token)
             out[str(token)] = {
                 "sym": inst.tradingsymbol if inst else None,
+                "underlying": inst.underlying if inst else None,
                 "ltp": view.ltp, "bid": view.bid, "ask": view.ask,
+                "volume": view.volume, "oi": view.oi,
                 "feed_lag_us": view.feed_lag_us,
             }
         return out

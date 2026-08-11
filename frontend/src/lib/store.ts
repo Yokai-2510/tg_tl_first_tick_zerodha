@@ -171,7 +171,10 @@ function applyFrame(f: any, set: any, get: () => State) {
       // diffs are partial: merge by token, never replace the map
       const next = { ...get().market }
       for (const [token, row] of Object.entries(data as Record<string, Partial<MarketRow>>)) {
-        next[token] = { ...(next[token] ?? { sym: null, ltp: 0, bid: 0, ask: 0, feed_lag_us: null }), ...row }
+        next[token] = {
+          ...(next[token] ?? { sym: null, ltp: 0, bid: 0, ask: 0, volume: 0, oi: 0, feed_lag_us: null }),
+          ...row,
+        }
       }
       set({ market: next })
       break

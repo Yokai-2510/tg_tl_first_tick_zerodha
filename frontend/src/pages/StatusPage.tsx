@@ -5,6 +5,7 @@ import {
   bytes, duration, int, micros, millis, seconds, timeFromIso, timeFromUs, DASH,
 } from '../lib/format'
 import { Card, Confirm, KV, Section, Stat, Table } from '../components/ui'
+import CapitalCard from '../components/CapitalCard'
 
 export default function StatusPage() {
   const status = useStore((s) => s.status)
@@ -40,6 +41,8 @@ export default function StatusPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
+        <CapitalCard cap={status.capital} detail />
+
         <Card label="Feed">
           <KV k="Connected" v={status.feed.connected ? 'Yes' : 'No'}
               tone={status.feed.connected ? 'text-pos' : 'text-neg'} />

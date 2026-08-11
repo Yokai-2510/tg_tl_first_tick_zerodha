@@ -111,6 +111,12 @@ export interface PositionsSummary {
   unrealised: number; realised: number; charges: number
 }
 export interface Bucket { rejected: number; [k: string]: number }
+export interface Capital {
+  available: number; used: number; total: number; deployed_pct: number
+  opening_balance: number; payin: number; net: number
+  breakdown: { debits: number; span: number; exposure: number; option_premium: number }
+  simulated?: boolean
+}
 export interface Status {
   phase: Phase; entries_allowed: boolean; last_error: string | null
   schedule: Record<string, string>
@@ -118,6 +124,7 @@ export interface Status {
   mode: 'paper' | 'live'; halted: boolean; uptime_s: number
   feed: FeedStats; engine: EngineStats; recorder: RecorderStats
   positions: PositionsSummary
+  capital: Capital
   rate_limits: Record<string, Bucket>
   ws_clients: number; server_time: string
 }
@@ -133,9 +140,12 @@ export interface Universe {
 export interface RankRow {
   rank: number; symbol: string; ltp: number; prev_close: number
   change_pct: number; selected: boolean
+  volume?: number; open?: number; high?: number; low?: number; buffer?: boolean
 }
 export interface MarketRow {
-  sym: string | null; ltp: number; bid: number; ask: number
+  sym: string | null; underlying?: string | null
+  ltp: number; bid: number; ask: number
+  volume?: number; oi?: number
   feed_lag_us: number | null
 }
 export interface Position {
