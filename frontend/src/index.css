@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Institutional terminal. Neutral surfaces, 1px lines, no shadows, no gradients.
+ * Tokens are defined for light on :root and swapped under prefers-color-scheme,
+ * so both themes are always complete.
+ */
+:root {
+  --bg: 255 255 255;
+  --surface: 250 250 250;
+  --raised: 255 255 255;
+  --line: 228 228 231;
+  --ink: 24 24 27;
+  --muted: 113 113 122;
+  --accent: 37 99 235;
+  --pos: 5 150 105;
+  --neg: 220 38 38;
+  --warn: 217 119 6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: 10 10 11;
+    --surface: 20 20 22;
+    --raised: 26 26 29;
+    --line: 38 38 42;
+    --ink: 250 250 250;
+    --muted: 161 161 170;
+    --accent: 59 130 246;
+    --pos: 16 185 129;
+    --neg: 239 68 68;
+    --warn: 245 158 11;
+  }
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  background-color: rgb(var(--bg));
+  color: rgb(var(--ink));
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+               Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 18px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Every digit in this app aligns. Non-negotiable for scanning columns. */
+body, input, select, button, table, td, th {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+               "Liberation Mono", monospace;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--line));
+  border-radius: 5px;
+  border: 2px solid rgb(var(--bg));
+}
+
+:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 1px;
+}
+
+@layer components {
+  .card {
+    @apply bg-surface border border-line rounded-card;
+  }
+  .lbl {
+    @apply text-label uppercase tracking-wider text-muted font-medium;
+  }
+  .btn {
+    @apply inline-flex items-center gap-1.5 h-8 px-3 rounded-card border border-line
+           bg-raised text-ink text-micro font-medium
+           hover:border-muted disabled:opacity-40 disabled:cursor-not-allowed
+           transition-colors duration-100;
+  }
+  .btn-primary {
+    @apply bg-accent border-accent text-white hover:opacity-90 hover:border-accent;
+  }
+  .btn-danger {
+    @apply border-neg/40 text-neg hover:border-neg hover:bg-neg/5;
+  }
+  .inp {
+    @apply h-8 px-2 rounded-card border border-line bg-raised text-ink text-micro
+           w-full focus:border-accent transition-colors duration-100;
+  }
+  .th {
+    @apply lbl text-left font-medium px-3 py-2 bg-surface
+           border-b border-line whitespace-nowrap sticky top-0 z-10;
+  }
+  .td {
+    @apply px-3 py-1.5 border-b border-line/60 whitespace-nowrap;
+  }
+  .num { @apply text-right; }
+}
