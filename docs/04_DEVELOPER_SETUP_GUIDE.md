@@ -381,10 +381,10 @@ host never talks to the broker — the browser talks straight to this EC2.
 
 | Host | Free tier | Notes |
 |---|---|---|
-| **Cloudflare Pages** ← recommended | Unlimited bandwidth, unlimited sites, 500 builds/mo | Serves at the domain root, so no Vite `base` juggling. Reads `public/_redirects`. |
+| **Cloudflare** ← recommended | Unlimited bandwidth, 500 builds/mo | Serves at the domain root, so no Vite `base` juggling. Connecting a repo creates a **Worker with static assets**; `wrangler.jsonc` is committed for it. True 200 on deep links. |
 | Netlify | 100 GB bandwidth, 300 build-min/mo | `frontend/netlify.toml` is committed — zero dashboard config. |
 | Vercel | 100 GB bandwidth | `frontend/vercel.json` is committed. New hostname per preview push. |
-| GitHub Pages | Unlimited for public repos | Serves under `/<repo>/`; needs `--base=/<repo>/` and `dist/404.html`. |
+| GitHub Pages | Unlimited for public repos | **No extra account.** `.github/workflows/deploy-frontend.yml` is committed; flip Settings → Pages → Source to *GitHub Actions*. Serves under `/<repo>/`; deep links render but return HTTP 404. |
 | Hostinger / cPanel | **none** (paid only) | Works as a plain upload if you already pay for it — see 7.4. |
 
 All of them need the same three settings, because the repo root is the Python backend:
@@ -394,6 +394,9 @@ All of them need the same three settings, because the repo root is the Python ba
 | Root / base directory | `frontend` |
 | Build command | `npm run build` |
 | Output directory | `dist` |
+
+GitHub Pages is the exception — it builds in Actions, so there is nothing to
+configure in a dashboard beyond turning Pages on (§7.4a).
 
 ### 7.2 Environment variables
 
@@ -414,23 +417,93 @@ anyone refreshes or opens a deep link. The config for this is already committed:
 
 | Host | File | Already in repo |
 |---|---|---|
+| Cloudflare Workers | `wrangler.jsonc` → `not_found_handling: single-page-application` | ✅ |
 | Cloudflare Pages, Netlify | `frontend/public/_redirects` → `/* /index.html 200` | ✅ |
 | Netlify (full config) | `frontend/netlify.toml` | ✅ |
 | Vercel | `frontend/vercel.json` rewrite | ✅ |
-| Apache / Hostinger | `public_html/.htaccess` | see 7.4 |
+| GitHub Pages | `dist/404.html` copy, made by the workflow | ✅ |
+| Apache / Hostinger | `public_html/.htaccess` | see 7.6 |
 
 The status must be **200**, not a 301/302 — a redirect changes the URL in the address bar
 and loses the route.
 
-### 7.4 Cloudflare Pages, step by step
+### 7.4 Cloudflare, step by step
 
-1. Cloudflare dashboard → **Workers & Pages** → **Create** → **Pages** →
-   **Connect to Git**, authorise GitHub, pick `tg_tl_first_tick_zerodha`
-2. Build settings: preset **Vite**, root directory `frontend`,
-   build `npm run build`, output `dist`
-3. Add the two `VITE_*` variables (Production **and** Preview)
-4. **Save and Deploy** → you get `https://<project>.pages.dev`
-5. Put that origin in `cors_origins` (7.5) — until then the browser blocks everything
+Connecting a repo under **Workers & Pages** now creates a **Worker with static
+assets**, not a Pages project. That is fine — it is Cloudflare's current path for
+static sites and it returns a true 200 on deep links — but it needs three things
+this repo now pins in [`wrangler.jsonc`](../wrangler.jsonc), because wrangler
+guesses all three wrongly on a repo whose root is a Python backend:
+
+| | Wrong guess | Pinned value |
+|---|---|---|
+| What to serve | `frontend/` — uploads `src/App.tsx` as a *website* | `./frontend/dist` |
+| SPA routing | 404 on `/positions` | `not_found_handling: single-page-application` |
+| Public URL | implicit, and the dashboard showed *No URLs enabled* | `workers_dev: true` |
+
+**The build command is the one thing wrangler cannot infer**, and it must be set in
+the dashboard. Left alone, Cloudflare sees `requirements.txt` at the repo root,
+decides the project is Python, runs `pip install -r requirements.txt`, and never
+runs Vite at all — so `frontend/dist` does not exist and the raw source gets served.
+
+1. **Workers & Pages → your Worker → Settings → Build**
+2. **Build command:** `cd frontend && npm ci && npm run build`
+3. **Deploy command:** `npx wrangler deploy` (already the default)
+4. **Root directory:** `/` — leave it at the repo root so `wrangler.jsonc` is found
+5. **Variables and Secrets** (build-time), add as plain text:
+   ```
+   VITE_API_BASE = https://203-0-113-10.sslip.io/api/v1
+   VITE_WS_URL   = wss://203-0-113-10.sslip.io/api/v1/ws
+   ```
+6. **Retry deployment** from the Deployments tab
+7. Add the resulting origin — `https://<worker>.<subdomain>.workers.dev` — to
+   `cors_origins` (§7.5)
+
+Confirm it worked by checking the build log for `vite build` and an upload list of
+**hashed** files (`assets/index-XXXXXXXX.js`), not `.tsx` sources.
+
+> Leave `VITE_BASE` unset here. Cloudflare serves at the domain root; only GitHub
+> Pages needs a base path.
+
+#### Pages instead of Workers
+
+The classic Pages project still works and reads `frontend/public/_redirects` for SPA
+routing. Create it explicitly via **Workers & Pages → Create → Pages → Connect to
+Git**, then set root directory `frontend`, preset **Vite**, build `npm run build`,
+output `dist`. There is no advantage over the Worker above unless you specifically
+want Pages' preview-per-branch model.
+
+### 7.4a GitHub Pages — hosting straight from the repo
+
+No third-party account. The workflow is committed already.
+
+1. **Settings → Pages → Source: GitHub Actions** — the only required click
+2. *(optional)* **Settings → Secrets and variables → Actions → Variables**, add
+   `VITE_API_BASE` and `VITE_WS_URL`; the workflow falls back to the sslip.io
+   values if they are absent
+3. Push anything under `frontend/`, or run the workflow from the **Actions** tab
+4. Site: `https://<owner>.github.io/<repo>/`
+
+The origin to allow-list is the **bare host** — `https://<owner>.github.io` — because
+an `Origin` header never includes a path. Allow-listing the URL with `/<repo>/` on
+the end silently fails.
+
+Requires a **public** repo (Pages on a private repo needs a paid plan). Since the
+whole repo is then readable, keep real credentials out of it: `config/credentials.json`
+and `config/config.json` are gitignored and only `.example` files are tracked.
+
+Two quirks the workflow handles for you, worth knowing when debugging:
+
+* Pages serves under `/<repo>/`, so the build sets `VITE_BASE` and `BrowserRouter`
+  takes its `basename` from `import.meta.env.BASE_URL`. Without the basename the
+  page renders blank — no route matches.
+* Pages has no rewrite rules, so `index.html` is copied to `404.html`. Deep links
+  boot the app but the response status stays **404**. Cloudflare Pages returns a
+  true 200; if that matters, use it instead.
+
+> On Windows, set `VITE_BASE` from PowerShell rather than Git Bash: MSYS rewrites a
+> leading-slash value into a Windows path (`/Program Files/Git/...`) and the bundle
+> ends up with a corrupt base that is easy to miss.
 
 ### 7.5 Backend CORS must list the frontend origin
 
@@ -442,6 +515,7 @@ and nothing appears in the backend log at all.
 "api": { "cors_origins": [
     "https://your-project.pages.dev",
     "https://*.your-project.pages.dev",   // per-branch previews
+    "https://your-name.github.io",        // GitHub Pages: host only, no /<repo>/ path
     "http://localhost:5173"
 ]}
 ```

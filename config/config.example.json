@@ -153,7 +153,7 @@
     "_doc": "Bind host to 127.0.0.1 when running behind Caddy (recommended) so the API is never directly exposed. cors_origins must list every frontend origin; an unlisted origin is blocked by the browser and looks exactly like the backend being down. An entry may use '*' as a host wildcard -- 'https://*.myproject.pages.dev' -- to cover preview deployments, which get a new hostname per branch (Cloudflare Pages, Netlify) or per push (Vercel). Pin your project name in the pattern rather than using a bare '*.pages.dev'. NEVER use '*' alone with a real auth_token.",
     "host": "127.0.0.1",
     "port": 8080,
-    "cors_origins": ["https://your-project.pages.dev", "https://*.your-project.pages.dev", "http://localhost:5173"],
+    "cors_origins": ["https://your-project.pages.dev", "https://*.your-project.pages.dev", "https://your-name.github.io", "http://localhost:5173"],
     "auth_token": "REPLACE_ME_openssl_rand_hex_32",
     "ws_push_interval_ms": 250
   },

@@ -23,6 +23,9 @@ npm run build       # tsc -b && vite build  ->  dist/
 npm run typecheck
 ```
 
+> On Windows, set `VITE_BASE` from **PowerShell**, not Git Bash — MSYS rewrites a
+> leading-slash value into a Windows path and silently produces a broken bundle.
+
 ## Deploy
 
 This is a **static SPA** — `npm run build` produces `dist/`, which any static host
@@ -35,22 +38,31 @@ Three settings matter everywhere:
 | **Root / base directory** | `frontend` (the repo root is a Python backend) |
 | **Build / output** | `npm run build` → `dist` |
 | **Env vars (build time)** | `VITE_API_BASE`, `VITE_WS_URL` — Vite **inlines** these, so they must be set for the build, not the runtime. Changing one requires a redeploy. |
+| **`VITE_BASE`** | Leave unset for every host except GitHub Pages, which serves under `/<repo>/`. |
 
 ```
 VITE_API_BASE = https://15-252-140-30.sslip.io/api/v1
 VITE_WS_URL   = wss://15-252-140-30.sslip.io/api/v1/ws
 ```
 
-### Cloudflare Pages — recommended free option
-Unlimited bandwidth and unlimited sites on the free plan; served at the root path.
+### Cloudflare — recommended free option
+Unlimited bandwidth, served at the domain root. Connecting a repo under Workers &
+Pages creates a **Worker with static assets**; [`../wrangler.jsonc`](../wrangler.jsonc)
+is committed and pins the asset directory, SPA routing and the workers.dev URL.
 
-1. Workers & Pages → **Create** → **Pages** → Connect to Git → pick the repo
-2. Root directory `frontend` · Framework preset **Vite** · Build `npm run build`
-   · Output `dist`
-3. Add the two environment variables above (Production **and** Preview)
-4. Save and Deploy
+One setting is **not** in the repo and must be set in the dashboard —
+**Settings → Build → Build command**:
 
-`public/_redirects` handles SPA routing automatically.
+```
+cd frontend && npm ci && npm run build
+```
+
+Without it Cloudflare sees `requirements.txt` in the repo root, assumes Python, runs
+`pip install`, never runs Vite, and serves the raw `.tsx` source. Then add
+`VITE_API_BASE` / `VITE_WS_URL` under **Variables and Secrets** and redeploy.
+
+A healthy build log shows `vite build` and uploads hashed `assets/index-*.js` files.
+See [`../docs/04_DEVELOPER_SETUP_GUIDE.md`](../docs/04_DEVELOPER_SETUP_GUIDE.md) §7.4.
 
 ### Netlify
 `netlify.toml` is committed with base, build, publish, env vars and the SPA
@@ -62,11 +74,27 @@ Import the repo → Root Directory `frontend` → preset Vite → add the two en
 variables. `vercel.json` supplies the SPA rewrite. Note that each preview
 deployment gets a **different hostname**, and every one needs CORS allow-listing.
 
-### GitHub Pages
-Works, with one caveat: Pages serves from `https://<user>.github.io/<repo>/`, so
-the build needs a base path — `vite build --base=/tg_tl_first_tick_zerodha/` — and
-`dist/index.html` must be copied to `dist/404.html` for client-side routes.
-Cloudflare Pages avoids both problems by serving at the root.
+### GitHub Pages — no third-party account needed
+Already wired: [`.github/workflows/deploy-frontend.yml`](../.github/workflows/deploy-frontend.yml)
+builds and publishes on every push to `main` that touches `frontend/`.
+
+1. Repo **Settings → Pages → Source: GitHub Actions** (this is the only click)
+2. **Settings → Secrets and variables → Actions → Variables** → add
+   `VITE_API_BASE` and `VITE_WS_URL` (the workflow has fallbacks, so this is
+   optional at first)
+3. Add `https://<owner>.github.io` to the backend's `cors_origins` — the origin is
+   the bare host; the `/<repo>/` path is **not** part of it
+
+Site: `https://<owner>.github.io/<repo>/`
+
+Two Pages quirks the workflow already handles:
+- it serves under `/<repo>/`, so the build sets `VITE_BASE` and the router takes a
+  matching `basename` from `import.meta.env.BASE_URL`
+- it has no rewrite rules, so `dist/index.html` is copied to `dist/404.html`;
+  deep links boot the app but the HTTP status stays `404`
+
+That last point is the reason to prefer Cloudflare Pages if you don't mind a second
+account: it serves at the root and returns a true `200`.
 
 ### Hostinger / cPanel / any FTP host
 Hostinger has **no free plan** — its shared hosting is paid. If you already have an

@@ -1,0 +1,31 @@
+// Cloudflare Workers static-asset hosting for the operator console.
+//
+// Without this file wrangler guesses, and it guessed wrong: it took the repo root
+// (which is a Python backend) and served `frontend/` raw, uploading src/App.tsx and
+// vite.config.ts as if they were a website. The three things it cannot infer are
+// pinned here -- what to serve, how to route an SPA, and that a URL should exist.
+//
+// `name` must keep matching the existing Worker or a deploy creates a second one.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tg-tl-first-tick-zerodha",
+  "compatibility_date": "2026-08-12",
+
+  // There is no Worker script -- this is assets-only, so no "main" entry.
+  "assets": {
+    // The BUILT output. `frontend` alone serves TypeScript source to the browser.
+    "directory": "./frontend/dist",
+
+    // Routes like /positions are client-side only and have no file on disk. This
+    // serves index.html for them with a real 200 (GitHub Pages can only manage a
+    // 404 body). Equivalent to the _redirects rule, but explicit and versioned.
+    "not_found_handling": "single-page-application"
+  },
+
+  // The first deploy warned that both of these were being enabled implicitly.
+  // Stating them means the dashboard cannot drift away from what the repo says.
+  "workers_dev": true,
+  "preview_urls": true,
+
+  "observability": { "enabled": true }
+}

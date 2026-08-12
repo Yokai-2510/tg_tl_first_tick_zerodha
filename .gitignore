@@ -35,6 +35,10 @@ htmlcov/
 master.json
 instruments_*.csv
 
+# ---- Cloudflare wrangler ----
+.wrangler/
+.dev.vars
+
 # ---- OS / editor ----
 .DS_Store
 Thumbs.db
