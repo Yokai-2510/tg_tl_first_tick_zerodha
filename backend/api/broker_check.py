@@ -55,16 +55,27 @@ def mask(value: str) -> str:
 def broker_section(creds: dict, broker: str) -> dict:
     """The credential block for one broker, whichever layout the file uses.
 
-    Zerodha keys historically sit at the top level rather than under a "zerodha"
-    key, so a plain `creds[broker]` lookup finds nothing for the very broker that
-    is usually configured.
+    Precedence MUST match load_credentials, or this screen reports values the login
+    is not using. A real credentials.json was found holding both: genuine keys at
+    the top level and a leftover `zerodha` section still containing the example
+    placeholders. load_credentials lifts the section with setdefault, so the top
+    level wins -- and preferring the section here made the console display
+    placeholders and call them valid.
+
+    Blank top-level values do not count as present, so a half-filled top level
+    still falls back to the section for the keys it does not define.
     """
-    section = (creds or {}).get(broker)
-    if isinstance(section, dict):
+    creds = creds or {}
+    section = creds.get(broker)
+    section = dict(section) if isinstance(section, dict) else {}
+
+    if broker != "zerodha":
         return section
-    if broker == "zerodha":
-        return {k: v for k, v in (creds or {}).items() if not isinstance(v, dict)}
-    return {}
+
+    flat = {k: v for k, v in creds.items()
+            if not isinstance(v, dict) and not k.startswith("_")
+            and str(v).strip()}
+    return {**section, **flat}          # top level wins, exactly as the loader does
 
 
 def credential_view(creds: dict, brokers: list[str]) -> list[dict]:

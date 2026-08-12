@@ -262,3 +262,39 @@ def test_a_truly_incomplete_file_still_raises(tmp_path):
     p.write_text(json.dumps({"api_key": "only-this"}), encoding="utf-8")
     with pytest.raises(ConfigError, match="missing required"):
         load_credentials(p)
+
+
+def test_top_level_credentials_win_over_a_leftover_zerodha_section():
+    """A real file was found with genuine keys at the top level AND the example
+    placeholders still sitting in a "zerodha" section. load_credentials lifts the
+    section with setdefault, so the top level is what logs in -- and this screen
+    must report the same values, or it certifies credentials nobody is using."""
+    from backend.api.broker_check import broker_section
+    mixed = {
+        "api_key": "REAL_KEY_1234567",           # 16, the one that logs in
+        "api_secret": "R" * 32, "user_id": "AB1234",
+        "password": "realpass11", "totp_key": "T" * 32,
+        "zerodha": {"api_key": "your_kite_api_key",       # 17, the placeholder
+                    "api_secret": "your_kite_api_secret",
+                    "user_id": "AB1234", "password": "your_kite_password",
+                    "totp_key": "YOUR_BASE32_TOTP_SEED"},
+    }
+    sec = broker_section(mixed, "zerodha")
+    assert sec["api_key"] == "REAL_KEY_1234567"
+    assert len(sec["api_secret"]) == 32
+    view = credential_view(mixed, ["zerodha"])[0]
+    lengths = {f["key"]: f["length"] for f in view["fields"]}
+    assert lengths["api_key"] == 16, "reported the placeholder, not the live key"
+    assert lengths["totp_key"] == 32
+
+
+def test_a_blank_top_level_value_falls_back_to_the_section():
+    """Half-filled top level must not mask a section that has the real value."""
+    from backend.api.broker_check import broker_section
+    mixed = {"api_key": "   ", "zerodha": {"api_key": "REAL_KEY_1234567"}}
+    assert broker_section(mixed, "zerodha")["api_key"] == "REAL_KEY_1234567"
+
+
+def test_the_doc_key_is_never_reported_as_a_credential():
+    from backend.api.broker_check import broker_section
+    assert "_doc" not in broker_section({"_doc": "notes", "api_key": "k"}, "zerodha")
