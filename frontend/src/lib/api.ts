@@ -6,10 +6,46 @@
  * deal with the envelope.
  */
 
+/**
+ * Where the backend lives.
+ *
+ * Vite inlines VITE_API_BASE at BUILD time, which means repointing the console at
+ * a new server would otherwise need a rebuild and redeploy. So a URL saved in
+ * localStorage wins over the compiled-in default: the sign-in screen can change
+ * it, and it survives reloads. The build-time value stays the sensible default.
+ */
+const OVERRIDE_KEY = 'ft.api_base'
+
+function storedBase(): string {
+  try { return (localStorage.getItem(OVERRIDE_KEY) ?? '').trim() } catch { return '' }
+}
+
+/** `https://host/api/v1` -> `wss://host/api/v1/ws`, so one field configures both. */
+export function wsUrlFor(apiBase: string): string {
+  const base = apiBase.replace(/\/+$/, '')
+  const scheme = base.startsWith('https://') ? 'wss://'
+               : base.startsWith('http://') ? 'ws://' : ''
+  const rest = base.replace(/^https?:\/\//, '')
+  return `${scheme || 'wss://'}${rest}${base.endsWith('/ws') ? '' : '/ws'}`
+}
+
+const OVERRIDE = storedBase()
+
 export const API_BASE: string =
-  (import.meta.env.VITE_API_BASE as string) ?? 'http://127.0.0.1:8080/api/v1'
+  OVERRIDE || ((import.meta.env.VITE_API_BASE as string) ?? 'http://127.0.0.1:8080/api/v1')
 export const WS_URL: string =
-  (import.meta.env.VITE_WS_URL as string) ?? 'ws://127.0.0.1:8080/api/v1/ws'
+  OVERRIDE ? wsUrlFor(OVERRIDE)
+           : ((import.meta.env.VITE_WS_URL as string) ?? 'ws://127.0.0.1:8080/api/v1/ws')
+
+export const apiBaseIsOverridden = !!OVERRIDE
+
+/** Persist a backend URL and reload, so every module picks up the new value. */
+export function setApiBase(url: string | null): void {
+  const clean = (url ?? '').trim().replace(/\/+$/, '')
+  if (clean) localStorage.setItem(OVERRIDE_KEY, clean)
+  else localStorage.removeItem(OVERRIDE_KEY)
+  location.reload()
+}
 
 /**
  * Why this check exists: Vite inlines `VITE_API_BASE` at BUILD time. A host that
@@ -106,6 +142,16 @@ async function request<T>(
       err?.message ?? `Request failed (HTTP ${res.status})`, err?.detail)
   }
   return (body?.data ?? body) as T
+}
+
+export interface LoginResult { token: string; username: string; expires_in: number }
+
+/** Exchange a username and password for a session token. */
+export async function login(username: string, password: string): Promise<LoginResult> {
+  return request<LoginResult>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  }, { withAuth: false })   // no token yet -- and a stale one must not be sent
 }
 
 const get = <T,>(p: string) => request<T>(p)

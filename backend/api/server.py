@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import secrets
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -20,6 +21,7 @@ from fastapi.responses import JSONResponse
 
 from ..core.enums import ExitTrigger, Phase
 from ..core.timeutil import epoch_us, has_passed, now_ist
+from .auth import find_user, issue_session, read_session, verify_password
 from .ws_push import WsHub
 
 API_PREFIX = "/api/v1"
@@ -37,6 +39,13 @@ def err(code: str, message: str, detail: Any = None) -> dict:
 
 #: Fallback when nothing is configured — the Vite dev server.
 DEV_ORIGIN = "http://localhost:5173"
+
+#: Verified against when the username is unknown, so that a wrong username and a
+#: wrong password take the same time and neither can be told apart from outside.
+_DUMMY_HASH = (
+    "pbkdf2_sha256$600000$AAAAAAAAAAAAAAAAAAAAAA$"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+)
 
 
 def cors_settings(origins: list[str]) -> tuple[list[str], str | None]:
@@ -88,11 +97,26 @@ def create_app(app_state) -> FastAPI:
     )
 
     def auth(authorization: str = Header(default="")) -> None:
-        token = app_state.cfg.api.auth_token
-        if not token:
-            return                                    # unset token = open (dev only)
-        if authorization != f"Bearer {token}":
+        """Two credentials are accepted, deliberately:
+
+        * a session token from POST /auth/login -- what a person uses
+        * the static `api.auth_token` -- what scripts, curl and monitoring use
+
+        Both arrive as `Authorization: Bearer <...>`; the static token is checked
+        first because it is a single constant-time compare.
+        """
+        cfg = app_state.cfg.api
+        if not cfg.auth_token and not cfg.users:
+            return                          # nothing configured = open (dev only)
+
+        presented = authorization[7:] if authorization.startswith("Bearer ") else ""
+        if not presented:
             raise HTTPException(status_code=401, detail="AUTH_INVALID")
+        if cfg.auth_token and secrets.compare_digest(presented, cfg.auth_token):
+            return
+        if read_session(presented, cfg.auth_token) is not None:
+            return
+        raise HTTPException(status_code=401, detail="AUTH_INVALID")
 
     @api.exception_handler(HTTPException)
     async def _http_exc(_request, exc: HTTPException):
@@ -301,6 +325,48 @@ def create_app(app_state) -> FastAPI:
             pass
         finally:
             hub.disconnect(ws)
+
+    @api.post(f"{API_PREFIX}/auth/login")
+    async def login(body: dict):
+        """Exchange a username and password for a session token.
+
+        Deliberately vague on failure: a distinct "no such user" would let anyone
+        enumerate valid usernames. Both branches also do the same amount of work
+        where it matters -- an unknown user still costs a hash verification, so
+        response time does not leak whether the account exists.
+        """
+        cfg = app_state.cfg.api
+        username = str(body.get("username") or "").strip()
+        password = str(body.get("password") or "")
+        if not username or not password:
+            raise HTTPException(400, "username and password are required")
+        if not cfg.users:
+            raise HTTPException(
+                409, "No accounts are configured. Add api.users in config.json, or "
+                     "sign in with the api.auth_token instead.")
+        if not cfg.auth_token:
+            raise HTTPException(
+                409, "api.auth_token must be set -- it is the session signing key.")
+
+        user = find_user(cfg.users, username)
+        # A dummy hash keeps the failure path as slow as the success path.
+        stored = getattr(user, "password_hash", "") if user else _DUMMY_HASH
+        if not verify_password(password, stored) or user is None:
+            app_state.log.warning(f"failed sign-in for {username!r}")
+            raise HTTPException(401, "Invalid username or password.")
+
+        ttl = cfg.session_ttl_hours * 3600
+        token = issue_session(user.username, cfg.auth_token, ttl_seconds=ttl)
+        app_state.log.info(f"sign-in: {user.username}")
+        return ok({"token": token, "username": user.username, "expires_in": ttl})
+
+    @api.get(f"{API_PREFIX}/auth/whoami", dependencies=[Depends(auth)])
+    async def whoami(authorization: str = Header(default="")):
+        presented = authorization[7:] if authorization.startswith("Bearer ") else ""
+        claims = read_session(presented, app_state.cfg.api.auth_token)
+        return ok({"username": (claims or {}).get("u"),
+                   "kind": "session" if claims else "api_token",
+                   "expires_at": (claims or {}).get("exp")})
 
     @api.post(f"{API_PREFIX}/auth/ws-ticket", dependencies=[Depends(auth)])
     async def ws_ticket():

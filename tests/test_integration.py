@@ -66,11 +66,28 @@ class FakeKite:
 
 # ---------------------------------------------------------------- harness
 
+class _CapturingLog:
+    """Matches the real Application's `log` interface and keeps what it was told,
+    so a test can assert that something was recorded rather than just not crash."""
+
+    def __init__(self):
+        self.lines: list[tuple[str, str]] = []
+
+    def _put(self, level, msg):
+        self.lines.append((level, str(msg)))
+
+    def info(self, msg): self._put("info", msg)
+    def warning(self, msg): self._put("warning", msg)
+    def error(self, msg): self._put("error", msg)
+    def debug(self, msg): self._put("debug", msg)
+
+
 class Harness:
     """A cut-down Application good enough to drive the API and the engine."""
 
     def __init__(self, cfg, tmp_path, kite=None, config_path=None):
         self.cfg = cfg
+        self.log = _CapturingLog()
         self.kite = kite or FakeKite()
         self._config_path = config_path
         self.started_at = time.monotonic()
@@ -484,3 +501,110 @@ def test_get_from_an_allowed_origin_carries_the_header(harness):
         r = c.get(f"{API_PREFIX}/health", headers={"Origin": "https://a.pages.dev"})
     assert r.status_code == 200
     assert r.headers["access-control-allow-origin"] == "https://a.pages.dev"
+
+
+# ---------------------------------------------------------------- sign-in
+
+def _with_user(harness, username="vijay", password="s3cret"):
+    """Give the harness one account. Low iteration count to keep tests quick."""
+    from backend.api.auth import hash_password
+    from backend.config.schema import ApiUser
+    harness.cfg.api.users = [
+        ApiUser(username=username, password_hash=hash_password(password, iterations=1000))
+    ]
+    return username, password
+
+
+def test_login_returns_a_session_that_opens_the_api(harness):
+    user, pw = _with_user(harness)
+    with TestClient(create_app(harness)) as c:
+        r = c.post(f"{API_PREFIX}/auth/login",
+                   json={"username": user, "password": pw})
+        assert r.status_code == 200, r.text
+        tok = r.json()["data"]["token"]
+        assert r.json()["data"]["username"] == user
+
+        # The whole point: that token must work everywhere the api_token does.
+        r2 = c.get(f"{API_PREFIX}/status", headers={"Authorization": f"Bearer {tok}"})
+        assert r2.status_code == 200
+        r3 = c.get(f"{API_PREFIX}/auth/whoami", headers={"Authorization": f"Bearer {tok}"})
+        assert r3.json()["data"] == {"username": user, "kind": "session",
+                                     "expires_at": r3.json()["data"]["expires_at"]}
+
+
+def test_login_rejects_a_wrong_password(harness):
+    user, _ = _with_user(harness)
+    with TestClient(create_app(harness)) as c:
+        r = c.post(f"{API_PREFIX}/auth/login",
+                   json={"username": user, "password": "wrong"})
+    assert r.status_code == 401
+    # A failed sign-in must leave a trace; a silent one cannot be investigated.
+    assert any(lvl == "warning" and user in msg for lvl, msg in harness.log.lines)
+
+
+def test_a_failed_sign_in_never_logs_the_password(harness):
+    user, _ = _with_user(harness)
+    with TestClient(create_app(harness)) as c:
+        c.post(f"{API_PREFIX}/auth/login",
+               json={"username": user, "password": "hunter2"})
+    assert not any("hunter2" in msg for _, msg in harness.log.lines)
+
+
+def test_login_does_not_reveal_whether_a_username_exists(harness):
+    """Both failures must be indistinguishable, or usernames can be enumerated."""
+    user, _ = _with_user(harness)
+    with TestClient(create_app(harness)) as c:
+        bad_pw = c.post(f"{API_PREFIX}/auth/login",
+                        json={"username": user, "password": "wrong"})
+        no_user = c.post(f"{API_PREFIX}/auth/login",
+                         json={"username": "nobody", "password": "wrong"})
+    assert bad_pw.status_code == no_user.status_code == 401
+    assert bad_pw.json()["error"]["message"] == no_user.json()["error"]["message"]
+
+
+def test_login_needs_both_fields(harness):
+    _with_user(harness)
+    with TestClient(create_app(harness)) as c:
+        for body in ({"username": "vijay"}, {"password": "s3cret"}, {}):
+            assert c.post(f"{API_PREFIX}/auth/login", json=body).status_code == 400
+
+
+def test_login_says_so_when_no_accounts_exist(harness):
+    """A 409 naming the cause beats a bare 401 the operator cannot explain."""
+    harness.cfg.api.users = []
+    with TestClient(create_app(harness)) as c:
+        r = c.post(f"{API_PREFIX}/auth/login",
+                   json={"username": "vijay", "password": "x"})
+    assert r.status_code == 409
+    assert "no accounts" in r.json()["error"]["message"].lower()
+
+
+def test_the_static_api_token_still_works_alongside_accounts(harness):
+    """Scripts, curl and monitoring must not break when accounts are added."""
+    _with_user(harness)
+    with TestClient(create_app(harness)) as c:
+        r = c.get(f"{API_PREFIX}/status",
+                  headers={"Authorization": "Bearer test-token"})
+        assert r.status_code == 200
+        w = c.get(f"{API_PREFIX}/auth/whoami",
+                  headers={"Authorization": "Bearer test-token"})
+        assert w.json()["data"]["kind"] == "api_token"
+
+
+def test_a_session_token_can_open_the_websocket(harness):
+    """The ws-ticket route is auth-gated, so a session must be able to get one."""
+    user, pw = _with_user(harness)
+    with TestClient(create_app(harness)) as c:
+        tok = c.post(f"{API_PREFIX}/auth/login",
+                     json={"username": user, "password": pw}).json()["data"]["token"]
+        r = c.post(f"{API_PREFIX}/auth/ws-ticket",
+                   headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200 and r.json()["data"]["ticket"]
+
+
+def test_garbage_and_forged_bearer_tokens_are_refused(harness):
+    _with_user(harness)
+    with TestClient(create_app(harness)) as c:
+        for bad in ("", "Bearer ", "Bearer nope", "Bearer v1.aaa.bbb", "test-token"):
+            r = c.get(f"{API_PREFIX}/status", headers={"Authorization": bad})
+            assert r.status_code == 401, f"{bad!r} was accepted"

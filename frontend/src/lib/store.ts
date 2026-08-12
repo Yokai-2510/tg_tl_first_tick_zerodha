@@ -10,7 +10,7 @@
 
 import { create } from 'zustand'
 import {
-  api, auth, ApiError, WS_URL,
+  api, auth, ApiError, WS_URL, login,
   type ConfigPayload, type EventRow, type LatencyRow, type LogRow,
   type MarketRow, type OrderRow, type Position, type RankRow,
   type SignalRow, type Status, type Universe,
@@ -39,7 +39,9 @@ interface State {
   lastUpdate: number
   error: string | null
 
-  signIn: (token: string) => Promise<void>
+  username: string | null
+  signIn: (username: string, password: string) => Promise<void>
+  signInWithToken: (token: string) => Promise<void>
   signOut: () => void
   bootstrap: () => Promise<void>
   refresh: (what?: 'all' | 'positions' | 'universe' | 'config' | 'audit') => Promise<void>
@@ -55,6 +57,7 @@ let retryTimer: number | null = null
 
 export const useStore = create<State>((set, get) => ({
   token: auth.get(),
+  username: (() => { try { return sessionStorage.getItem('ft.user') } catch { return null } })(),
   ready: false,
   status: null, universe: null, ranking: [], market: {},
   positions: [], closed: [], orders: [], signals: [],
@@ -64,9 +67,21 @@ export const useStore = create<State>((set, get) => ({
 
   setError: (error) => set({ error }),
 
-  async signIn(token) {
+  async signIn(username, password) {
+    // Any half-finished session must go before we try a new one, or a stale
+    // token could be sent with the login request.
+    auth.clear()
+    const res = await login(username, password)
+    auth.set(res.token)
+    set({ token: res.token, username: res.username })
+    try { sessionStorage.setItem('ft.user', res.username) } catch { /* private mode */ }
+    await get().bootstrap()
+  },
+
+  /** Kept for the api_token path: scripts, and a first run before accounts exist. */
+  async signInWithToken(token) {
     auth.set(token)
-    set({ token })
+    set({ token, username: null })
     await api.status()              // throws 401 if the token is wrong
     await get().bootstrap()
   },
@@ -74,7 +89,8 @@ export const useStore = create<State>((set, get) => ({
   signOut() {
     get().disconnect()
     auth.clear()
-    set({ token: null, ready: false, status: null })
+    try { sessionStorage.removeItem('ft.user') } catch { /* private mode */ }
+    set({ token: null, username: null, ready: false, status: null })
   },
 
   async bootstrap() {

@@ -406,12 +406,26 @@ class AlertsCfg(_Base):
     on: list[str] = Field(default_factory=list)
 
 
+class ApiUser(_Base):
+    """One console account. The password is never stored, only a PBKDF2 hash --
+    generate one with `python -m backend.tools.passwd <password>`."""
+
+    username: str = Field(min_length=1)
+    password_hash: str = Field(default="", min_length=0)
+
+
 class ApiCfg(_Base):
     host: str = "127.0.0.1"
     port: int = Field(8080, ge=1, le=65535)
     cors_origins: list[str] = Field(default_factory=list)
     auth_token: str = ""
     ws_push_interval_ms: int = Field(250, ge=50, le=5000)
+    #: Console accounts for username+password sign-in. `auth_token` keeps working
+    #: alongside these for scripts, curl and health checks.
+    users: list[ApiUser] = Field(default_factory=list)
+    #: How long a sign-in lasts. Sessions are signed with `auth_token`, so
+    #: rotating that token revokes every outstanding session immediately.
+    session_ttl_hours: int = Field(12, ge=1, le=720)
 
     @model_validator(mode="after")
     def _no_wildcard_with_token(self):

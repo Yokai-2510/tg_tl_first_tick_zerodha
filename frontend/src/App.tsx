@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { API_BASE, api, configProblem, setUnauthorizedHandler } from './lib/api'
+import { API_BASE, api, apiBaseIsOverridden, configProblem, setApiBase,
+         setUnauthorizedHandler } from './lib/api'
 import { clockIst } from './lib/format'
 import { useStore } from './lib/store'
 import { Banner, Confirm, PhasePill, Pill, StatusDot } from './components/ui'
@@ -196,41 +197,120 @@ function Alerts() {
 
 function SignIn() {
   const signIn = useStore((s) => s.signIn)
-  const [val, setVal] = useState('')
+  const signInWithToken = useStore((s) => s.signInWithToken)
+  const [user, setUser] = useState('')
+  const [pass, setPass] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  // Escape hatches, hidden by default so the normal case is just user + password.
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [tokenMode, setTokenMode] = useState(false)
+  const [tokenVal, setTokenVal] = useState('')
+  const [baseVal, setBaseVal] = useState(API_BASE)
 
   const go = async (e: React.FormEvent) => {
     e.preventDefault()
     setBusy(true); setErr(null)
-    try { await signIn(val.trim()) }
-    catch (e: any) { setErr(e?.message ?? 'Token rejected.') }
-    finally { setBusy(false) }
+    try {
+      if (tokenMode) await signInWithToken(tokenVal.trim())
+      else await signIn(user.trim(), pass)
+    } catch (e: any) {
+      // The backend deliberately does not say which field was wrong.
+      setErr(e?.message ?? 'Sign-in failed.')
+    } finally { setBusy(false) }
   }
+
+  const canSubmit = tokenMode ? !!tokenVal.trim() : (!!user.trim() && !!pass)
 
   return (
     <div className="min-h-full grid place-items-center p-4">
       <div className="w-full max-w-sm space-y-3">
-      <MisconfigBanner />
-      <form onSubmit={go} className="card p-6 w-full space-y-4">
-        <div>
-          <div className="font-semibold text-[15px]">First-Tick Console</div>
-          <div className="text-micro text-muted mt-0.5">Operator access token required.</div>
+        <MisconfigBanner />
+        <form onSubmit={go} className="card p-6 w-full space-y-4">
+          <div>
+            <div className="font-semibold text-[15px]">First-Tick Console</div>
+            <div className="text-micro text-muted mt-0.5">
+              {tokenMode ? 'Sign in with an API token.' : 'Sign in to continue.'}
+            </div>
+          </div>
+
+          {tokenMode ? (
+            <label className="block">
+              <div className="lbl mb-1">API token</div>
+              <input className="inp mono" type="password" autoFocus
+                     placeholder="Paste token" value={tokenVal}
+                     onChange={(e) => setTokenVal(e.target.value)} />
+            </label>
+          ) : (
+            <>
+              <label className="block">
+                <div className="lbl mb-1">Username</div>
+                <input className="inp" autoFocus autoComplete="username"
+                       value={user} onChange={(e) => setUser(e.target.value)} />
+              </label>
+              <label className="block">
+                <div className="lbl mb-1">Password</div>
+                <input className="inp" type="password" autoComplete="current-password"
+                       value={pass} onChange={(e) => setPass(e.target.value)} />
+              </label>
+            </>
+          )}
+
+          {err && <div className="text-micro text-neg">{err}</div>}
+
+          <button className="btn btn-primary w-full justify-center"
+                  disabled={busy || !canSubmit}>
+            {busy ? 'Signing in…' : 'Sign in'}
+          </button>
+
+          <div className="flex items-center justify-between text-[11px]">
+            <button type="button" className="text-muted hover:text-ink"
+                    onClick={() => { setTokenMode(!tokenMode); setErr(null) }}>
+              {tokenMode ? 'Use username & password' : 'Use an API token'}
+            </button>
+            <button type="button" className="text-muted hover:text-ink"
+                    onClick={() => setShowAdvanced(!showAdvanced)}>
+              {showAdvanced ? 'Hide' : 'Backend URL'}
+            </button>
+          </div>
+
+          {showAdvanced && (
+            <div className="pt-3 border-t border-line space-y-2">
+              <label className="block">
+                <div className="lbl mb-1">Backend URL</div>
+                <input className="inp mono text-[11px]" value={baseVal}
+                       onChange={(e) => setBaseVal(e.target.value)}
+                       placeholder="https://host/api/v1" />
+              </label>
+              <div className="text-[11px] text-muted leading-snug">
+                Saved in this browser and used instead of the compiled-in default,
+                so pointing at another server needs no rebuild. The live-stream URL
+                is derived from it.
+              </div>
+              <div className="flex gap-2">
+                {/* Changing the base reloads the page, so every module reads it. */}
+                <button type="button" className="btn flex-1 justify-center"
+                        disabled={!baseVal.trim() || baseVal.trim() === API_BASE}
+                        onClick={() => setApiBase(baseVal)}>
+                  Save & reload
+                </button>
+                {apiBaseIsOverridden && (
+                  <button type="button" className="btn flex-1 justify-center"
+                          onClick={() => setApiBase(null)}>
+                    Reset to default
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </form>
+
+        {/* Which backend this build talks to — the fastest way to spot a console
+            deployed against the wrong server. */}
+        <div className="text-[11px] text-muted text-center mono break-all">
+          {API_BASE}{apiBaseIsOverridden && ' (overridden)'}
         </div>
-        <input className="inp mono" type="password" autoFocus placeholder="Paste token"
-               value={val} onChange={(e) => setVal(e.target.value)} />
-        {err && <div className="text-micro text-neg">{err}</div>}
-        <button className="btn btn-primary w-full justify-center"
-                disabled={busy || !val.trim()}>
-          {busy ? 'Verifying…' : 'Continue'}
-        </button>
-        <div className="text-[11px] text-muted leading-snug">
-          Stored in this tab only. Never written to disk.
-        </div>
-      </form>
-      {/* Which backend this build points at -- the fastest way to spot a
-          frontend deployed with the wrong VITE_API_BASE. */}
-      <div className="text-[11px] text-muted text-center mono break-all">{API_BASE}</div>
       </div>
     </div>
   )
