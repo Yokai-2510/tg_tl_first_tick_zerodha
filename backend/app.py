@@ -354,12 +354,20 @@ class Application:
         return round(time.monotonic() - self.started_at, 1)
 
     def status_payload(self) -> dict:
+        # Imported here, like the other ticker imports, to keep kiteconnect out of
+        # module import time.
+        from .brokers.kite.ticker import FeedStats
+
         return {
             **self.scheduler.status(),
             "mode": str(self.cfg.trading_mode.mode),
             "halted": self._halted,
             "uptime_s": self.uptime_s,
-            "feed": self.kfeed.stats.as_dict() if self.kfeed else {"connected": False},
+            # A hand-written stub here shipped only {"connected": false}, so every
+            # other field was missing until the ticker existed and the console
+            # died on Object.entries(feed.modes). An empty FeedStats gives the
+            # identical shape, so the payload never changes contract.
+            "feed": (self.kfeed.stats if self.kfeed else FeedStats()).as_dict(),
             "engine": self.feed.stats(),
             "recorder": self.recorder.stats(),
             "positions": self.book.summary(),

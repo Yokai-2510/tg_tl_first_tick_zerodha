@@ -19,6 +19,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.server import API_PREFIX, create_app
+from backend.app import Application
+from backend.brokers.kite import ratelimit as kratelimit
 from backend.core.enums import ExitTrigger, Phase, PositionStatus, TradingMode
 from backend.core.timeutil import IST, epoch_us, mono_ns
 from backend.engine import exits as exits_mod
@@ -116,6 +118,8 @@ class Harness:
         from backend.api.ws_push import WsHub
         from backend.config.loader import ConfigStore
         self.hub = WsHub()
+        self.limiter = kratelimit.from_config(cfg.broker.rate_limits)
+        self.capital = None          # paper mode derives it
         # Point the store at a COPY under tmp_path: a config PATCH calls
         # store.save(), which must never write into the repo, and the store's
         # auth_token must match the one the tests authenticate with.
@@ -127,12 +131,11 @@ class Harness:
     # the API expects these
     uptime_s = property(lambda self: round(time.monotonic() - self.started_at, 1))
 
-    def status_payload(self):
-        return {**self.scheduler.status(), "mode": str(self.cfg.trading_mode.mode),
-                "halted": self._halted, "uptime_s": self.uptime_s,
-                "feed": {"connected": False}, "engine": self.feed.stats(),
-                "recorder": self.recorder.stats(),
-                "positions": self.book.summary(), "ws_clients": 0}
+    # Reuse the REAL implementation rather than a copy. The copy that used to live
+    # here had drifted: it returned feed={"connected": False} and no capital at
+    # all, so it happily passed while the shipped payload crashed the console.
+    status_payload = Application.status_payload
+    _paper_capital = Application._paper_capital
 
     def universe_payload(self):
         return {"nifty50": self.nifty50, "indices": [], "tradeable": [],
@@ -608,3 +611,39 @@ def test_garbage_and_forged_bearer_tokens_are_refused(harness):
         for bad in ("", "Bearer ", "Bearer nope", "Bearer v1.aaa.bbb", "test-token"):
             r = c.get(f"{API_PREFIX}/status", headers={"Authorization": bad})
             assert r.status_code == 401, f"{bad!r} was accepted"
+
+
+# ------------------------------------------------- payload shape stability
+
+#: Exactly what frontend/src/lib/api.ts declares as FeedStats. The console does
+#: Object.entries(feed.modes) unguarded, so a missing key is a blank page.
+FEED_FIELDS = {
+    "connected", "subscribed", "modes", "ticks", "batches", "order_events",
+    "reconnects", "gaps", "last_tick_age_ms", "last_error",
+}
+
+
+def test_status_feed_shape_is_the_same_with_no_feed_connected(harness):
+    """The bug this pins: /status returned only {"connected": false} before the
+    ticker existed, so the dashboard crashed on feed.modes being undefined."""
+    assert harness.kfeed is None, "this test is about the no-feed case"
+    with TestClient(create_app(harness)) as c:
+        feed = c.get(f"{API_PREFIX}/status",
+                     headers={"Authorization": "Bearer test-token"}).json()["data"]["feed"]
+    missing = FEED_FIELDS - set(feed)
+    assert not missing, f"/status feed is missing {sorted(missing)}"
+    assert isinstance(feed["modes"], dict), "modes must be an object, never null"
+    assert feed["connected"] is False
+
+
+def test_status_always_carries_the_sections_the_console_reads(harness):
+    """Every one of these is dereferenced unguarded on first paint."""
+    with TestClient(create_app(harness)) as c:
+        d = c.get(f"{API_PREFIX}/status",
+                  headers={"Authorization": "Bearer test-token"}).json()["data"]
+    for key in ("phase", "mode", "halted", "feed", "engine", "recorder",
+                "positions", "capital", "rate_limits", "server_time"):
+        assert key in d, f"/status is missing {key}"
+    for key in ("available", "used", "total", "deployed_pct", "breakdown"):
+        assert key in d["capital"], f"capital is missing {key}"
+    assert isinstance(d["rate_limits"], dict) and d["rate_limits"]

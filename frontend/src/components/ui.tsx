@@ -1,6 +1,6 @@
 /** Shared primitives. One card pattern, one table pattern, reused everywhere. */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Component, useEffect, useRef, useState, type ReactNode } from 'react'
 import { PHASE_ORDER, type Phase } from '../lib/api'
 import { timeFromUs } from '../lib/format'
 
@@ -264,4 +264,53 @@ export function KV({ k, v, tone = '' }: { k: string; v: ReactNode; tone?: string
       <span className={`text-micro font-medium ${tone}`}>{v}</span>
     </div>
   )
+}
+
+
+/**
+ * Catches render errors so a single bad field cannot blank the whole console.
+ *
+ * This exists because it already happened: /status omitted `feed.modes` before the
+ * ticker connected, `Object.entries(undefined)` threw, React unmounted the tree and
+ * the page went black with nothing in the UI to explain it. A crash should always
+ * name itself.
+ */
+export class ErrorBoundary extends Component<
+  { children: ReactNode }, { error: Error | null }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, info: unknown) {
+    // Keep it in the console too -- the message on screen is deliberately short.
+    console.error('render failed', error, info)
+  }
+
+  render() {
+    const { error } = this.state
+    if (!error) return this.props.children
+    return (
+      <div className="p-4 space-y-3">
+        <Banner tone="neg">
+          This screen failed to render. The rest of the console still works — the
+          error is below, and the browser console has the stack.
+        </Banner>
+        <div className="card p-4">
+          <div className="lbl mb-2">Error</div>
+          <pre className="text-[11px] mono whitespace-pre-wrap break-all text-neg">
+            {error.message || String(error)}
+          </pre>
+          <button className="btn mt-3" onClick={() => this.setState({ error: null })}>
+            Try again
+          </button>
+        </div>
+      </div>
+    )
+  }
 }

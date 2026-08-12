@@ -4,7 +4,7 @@ import { API_BASE, api, apiBaseIsOverridden, configProblem, setApiBase,
          setUnauthorizedHandler } from './lib/api'
 import { clockIst } from './lib/format'
 import { useStore } from './lib/store'
-import { Banner, Confirm, PhasePill, Pill, StatusDot } from './components/ui'
+import { Banner, Confirm, ErrorBoundary, PhasePill, Pill, StatusDot } from './components/ui'
 import Dashboard from './pages/Dashboard'
 import Positions from './pages/Positions'
 import LiveData from './pages/LiveData'
@@ -52,6 +52,9 @@ export default function App() {
         <main className="flex-1 min-w-0 p-4 md:p-5 overflow-x-hidden">
           <div className="space-y-2 empty:hidden mb-4 empty:mb-0"><MisconfigBanner /></div>
           <Alerts />
+          {/* Contained per-page: a crash on one screen must not take out the
+              nav and topbar, so the operator can still reach the others. */}
+          <ErrorBoundary>
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/positions" element={<Positions />} />
@@ -62,6 +65,7 @@ export default function App() {
             <Route path="/logs" element={<LogsEvents />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </ErrorBoundary>
         </main>
       </div>
     </div>

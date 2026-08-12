@@ -47,7 +47,7 @@ export default function StatusPage() {
           <KV k="Connected" v={status.feed.connected ? 'Yes' : 'No'}
               tone={status.feed.connected ? 'text-pos' : 'text-neg'} />
           <KV k="Subscribed" v={int(status.feed.subscribed)} />
-          {Object.entries(status.feed.modes).map(([m, n]) => (
+          {Object.entries(status.feed.modes ?? {}).map(([m, n]) => (
             <KV key={m} k={`  mode ${m}`} v={int(n)} />
           ))}
           <KV k="Ticks" v={int(status.feed.ticks)} />
@@ -95,7 +95,7 @@ export default function StatusPage() {
 
       <Section title="Broker rate limits">
         <div className="grid gap-4 md:grid-cols-3">
-          {Object.entries(status.rate_limits).map(([kind, b]) => (
+          {Object.entries(status.rate_limits ?? {}).map(([kind, b]) => (
             <Card key={kind} label={kind}>
               {Object.keys(b).filter((k) => k.startsWith('used_')).map((k) => {
                 const win = k.replace('used_', '')

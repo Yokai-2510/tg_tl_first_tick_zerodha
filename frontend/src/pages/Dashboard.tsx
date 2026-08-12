@@ -75,7 +75,7 @@ export default function Dashboard() {
             <KV k="Connection" v={status.feed.connected ? 'Connected' : 'Disconnected'}
                 tone={status.feed.connected ? 'text-pos' : 'text-neg'} />
             <KV k="Subscribed" v={`${int(status.feed.subscribed)} instruments`} />
-            <KV k="Modes" v={Object.entries(status.feed.modes)
+            <KV k="Modes" v={Object.entries(status.feed.modes ?? {})
                   .map(([m, n]) => `${m} ${n}`).join(' · ') || DASH} />
             <KV k="Ticks received" v={int(status.feed.ticks)} />
             <KV k={marketClosed ? 'Last trade age' : 'Last tick'}
