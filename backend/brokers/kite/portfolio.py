@@ -31,13 +31,35 @@ def orders(kite: Any, *, limiter=None) -> list[dict]:
         return []
 
 
-def margins(kite: Any, *, limiter=None) -> dict:
+def margins(kite: Any, *, limiter=None, strict: bool = False) -> dict:
+    """Kite's margin block.
+
+    `strict` exists because swallowing the error is actively harmful here: an empty
+    dict flows into `capital()` and comes out as a zero-filled view that is
+    indistinguishable from a real empty account. A caller that displays the number
+    -- or caches it -- must be able to tell "the call failed" from "you have no
+    money", so it passes strict=True and handles the exception.
+
+    The default stays tolerant for best-effort paths that only want a number if one
+    happens to be available.
+    """
     if limiter is not None:
         limiter.acquire("other", timeout=2.0)
     try:
-        return kite.margins() or {}
+        data = kite.margins() or {}
     except Exception:
+        if strict:
+            raise
         return {}
+    if strict and not (data.get("equity") or data.get("commodity")):
+        raise MarginsUnavailable(
+            "the broker returned no equity block; treating this as a failure rather "
+            "than reporting zero capital")
+    return data
+
+
+class MarginsUnavailable(RuntimeError):
+    """The margin call did not return usable data. Never means "zero balance"."""
 
 
 def available_cash(margins_data: dict) -> float:
@@ -104,5 +126,6 @@ def net_quantity(row: dict) -> int:
     return int(row.get("quantity") or 0)
 
 
-__all__ = ["positions", "orders", "margins", "available_cash", "capital",
+__all__ = ["positions", "orders", "margins", "MarginsUnavailable",
+           "available_cash", "capital",
            "day_position_map", "net_quantity"]

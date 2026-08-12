@@ -223,6 +223,61 @@ class FillModel(StrEnum):
     MIDPOINT = "midpoint"
 
 
+
+class LogLevel(StrEnum):
+    """Standard levels only, so the console can offer a closed list."""
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+
+
+class DataBroker(StrEnum):
+    """Who supplies the feed, instrument master and quotes."""
+
+    ZERODHA = "zerodha"
+    UPSTOX = "upstox"
+
+
+class TradeBroker(StrEnum):
+    """Who receives orders. `paper` touches no broker order API at all."""
+
+    ZERODHA = "zerodha"
+    UPSTOX = "upstox"
+    PAPER = "paper"
+
+
+class RollScope(StrEnum):
+    """Which instruments roll to the next expiry near physical settlement."""
+
+    STOCKS_ONLY = "stocks_only"
+    ALL = "all"
+    NONE = "none"
+
+
+class SnapshotSource(StrEnum):
+    """Which price a snapshot records as its reference."""
+
+    PREV_CLOSE = "prev_close"
+    LAST = "last"
+    OPEN = "open"
+
+
+class RecorderFormat(StrEnum):
+    NDJSON = "ndjson"
+
+
+class Compression(StrEnum):
+    NONE = "none"
+    ZSTD = "zstd"
+
+
+class UploadAfter(StrEnum):
+    EOD = "eod"
+    SESSION = "session"
+    NEVER = "never"
+
 __all__ = [
     "Phase", "ENTRY_PHASES", "EXIT_PHASES",
     "PositionStatus", "OrderStatus", "TERMINAL_STATUSES", "is_terminal",
@@ -231,4 +286,6 @@ __all__ = [
     "PriceSource", "PnlBasis", "AtmSource", "RankingBasis", "Moneyness",
     "OptionType", "InstrumentKind", "SubscribeMode", "TradingMode",
     "RecordKind", "DiskFullPolicy", "FillModel",
+    "LogLevel", "DataBroker", "TradeBroker", "RollScope", "SnapshotSource",
+    "RecorderFormat", "Compression", "UploadAfter",
 ]

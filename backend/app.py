@@ -424,10 +424,15 @@ class Application:
             self.capital = self._paper_capital()
             return
         try:
-            self.capital = kportfolio.capital(
-                kportfolio.margins(self.kite, limiter=self.limiter))
+            # strict: a failed call must raise, not resolve to a zero-filled view
+            # that silently replaces a good one on the dashboard.
+            fresh = kportfolio.capital(
+                kportfolio.margins(self.kite, limiter=self.limiter, strict=True))
         except Exception as exc:
-            self.log.error(f"capital refresh failed: {exc}")
+            self.log.error(f"capital refresh failed, keeping the last known view: {exc}")
+            return
+        fresh["simulated"] = False
+        self.capital = fresh
 
     def _paper_capital(self) -> dict:
         """Simulated capital so the console shows the same shape in paper mode."""

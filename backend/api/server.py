@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from ..core.enums import ExitTrigger, Phase
 from ..core.timeutil import epoch_us, has_passed, now_ist
 from .auth import find_user, issue_session, read_session, verify_password
+from .broker_check import credential_view, run_test, token_cache_state
 from .ws_push import WsHub
 
 API_PREFIX = "/api/v1"
@@ -325,6 +326,58 @@ def create_app(app_state) -> FastAPI:
             pass
         finally:
             hub.disconnect(ws)
+
+    @api.get(f"{API_PREFIX}/broker/credentials", dependencies=[Depends(auth)])
+    async def broker_credentials():
+        """What credentials the server holds, masked. No secret is ever returned."""
+        from ..config.loader import load_credentials
+        try:
+            creds = load_credentials(app_state.credentials_path)
+        except Exception as exc:
+            return ok({"error": f"{type(exc).__name__}: {exc}", "brokers": [],
+                       "token_cache": None})
+        brokers = sorted({str(cfg.broker.data_broker), str(cfg.broker.trade_broker)}
+                         - {"paper"})
+        return ok({
+            "path": str(app_state.credentials_path),
+            "data_broker": str(cfg.broker.data_broker),
+            "trade_broker": str(cfg.broker.trade_broker),
+            "brokers": credential_view(creds, brokers),
+            "token_cache": token_cache_state(cfg.system.data_dir),
+        })
+
+    @api.post(f"{API_PREFIX}/broker/test", dependencies=[Depends(auth)])
+    async def broker_test():
+        """Authenticate for real and exercise profile, margins and the master.
+
+        Runs in a worker thread: a full TOTP login takes seconds and must not block
+        the event loop that is also pushing ticks to this console.
+        """
+        from ..config.loader import load_credentials
+        try:
+            creds = load_credentials(app_state.credentials_path)
+        except Exception as exc:
+            raise HTTPException(409, f"Cannot read credentials: {exc}")
+
+        result = await asyncio.to_thread(
+            run_test, creds=creds, data_dir=cfg.system.data_dir,
+            broker=str(cfg.broker.data_broker), limiter=app_state.limiter)
+
+        # A successful margins call is the only way to know real capital before the
+        # 08:45 session starts, so keep it for the dashboard.
+        if result.get("capital"):
+            app_state.capital = dict(result["capital"])
+            app_state.capital["simulated"] = False
+        app_state.log.info(
+            "broker test: " + ", ".join(
+                f"{c['name']}={'ok' if c['ok'] else 'FAIL'}" for c in result["checks"]))
+        return ok(result)
+
+    @api.post(f"{API_PREFIX}/broker/capital/refresh", dependencies=[Depends(auth)])
+    async def capital_refresh():
+        """Re-read broker margins. Paper mode returns the simulated view."""
+        await asyncio.to_thread(app_state.refresh_capital)
+        return ok(app_state.capital or app_state._paper_capital())
 
     @api.post(f"{API_PREFIX}/auth/login")
     async def login(body: dict):

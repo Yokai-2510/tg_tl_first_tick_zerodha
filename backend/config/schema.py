@@ -12,8 +12,10 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..core.enums import (
-    AtmSource, DiskFullPolicy, FillModel, FallbackTo, Moneyness, PnlBasis,
-    PriceSource, Product, RankingBasis, TradingMode, Validity,
+    AtmSource, Compression, DataBroker, DiskFullPolicy, FillModel, FallbackTo,
+    LogLevel, Moneyness, PnlBasis, PriceSource, Product, RankingBasis,
+    RecorderFormat, RollScope, SnapshotSource, TradeBroker, TradingMode,
+    UploadAfter, Validity,
 )
 from ..core.timeutil import parse_hhmmss
 
@@ -38,7 +40,7 @@ def _time_field(name: str):
 class SystemCfg(_Base):
     timezone: str = "Asia/Kolkata"
     data_dir: str = "./data"
-    log_level: str = "INFO"
+    log_level: LogLevel = LogLevel.INFO
     retention_days: int = Field(7, ge=0)
 
 
@@ -118,30 +120,13 @@ class BrokerCfg(_Base):
     disturb another system already using that key.
     """
 
-    data_broker: str = "zerodha"
-    trade_broker: str = "zerodha"
+    data_broker: DataBroker = DataBroker.ZERODHA
+    trade_broker: TradeBroker = TradeBroker.ZERODHA
     api_key: str = ""
     product: ProductCfg = Field(default_factory=ProductCfg)
     rate_limits: RateLimitsCfg = Field(default_factory=RateLimitsCfg)
     timeouts: TimeoutsCfg = Field(default_factory=TimeoutsCfg)
     ws: WsCfg = Field(default_factory=WsCfg)
-
-    @field_validator("data_broker")
-    @classmethod
-    def _data_supported(cls, v: str) -> str:
-        value = v.strip().lower()
-        if value not in ("zerodha", "upstox"):
-            raise ValueError(f"data_broker must be zerodha or upstox, got {v!r}")
-        return value
-
-    @field_validator("trade_broker")
-    @classmethod
-    def _trade_supported(cls, v: str) -> str:
-        value = v.strip().lower()
-        if value not in ("zerodha", "upstox", "paper"):
-            raise ValueError(
-                f"trade_broker must be zerodha, upstox or paper, got {v!r}")
-        return value
 
 
 class TradingModeCfg(_Base):
@@ -198,7 +183,7 @@ class UniverseCfg(_Base):
 class ExpiryRollCfg(_Base):
     enabled: bool = True
     buffer_trading_days: int = Field(1, ge=0, le=5)
-    applies_to: str = "stocks_only"
+    applies_to: RollScope = RollScope.STOCKS_ONLY
 
 
 class InstrumentsCfg(_Base):
@@ -214,7 +199,7 @@ class SnapshotCfg(_Base):
     enabled: bool = True
     time: str = "09:09:00"
     window_seconds: int = Field(60, ge=0)
-    source: str = "prev_close"
+    source: SnapshotSource = SnapshotSource.PREV_CLOSE
     from_: str | None = Field(None, alias="from")
     to: str | None = None
 
@@ -371,13 +356,13 @@ class PositionsCfg(_Base):
 class UploadCfg(_Base):
     enabled: bool = False
     target: str = ""
-    after: str = "eod"
+    after: UploadAfter = UploadAfter.EOD
 
 
 class RecorderCfg(_Base):
     enabled: bool = True
-    format: str = "ndjson"
-    compression: str = "zstd"
+    format: RecorderFormat = RecorderFormat.NDJSON
+    compression: Compression = Compression.ZSTD
     record_depth_levels: int = Field(5, ge=0, le=5)
     flush_interval_ms: int = Field(500, ge=50)
     post_exit_record_seconds: int = Field(300, ge=0)
@@ -385,13 +370,6 @@ class RecorderCfg(_Base):
     max_disk_mb: int = Field(20000, ge=100)
     on_disk_full: DiskFullPolicy = DiskFullPolicy.STOP_RECORDING
     upload: UploadCfg = Field(default_factory=UploadCfg)
-
-    @field_validator("compression")
-    @classmethod
-    def _comp(cls, v: str) -> str:
-        if v not in ("none", "zstd"):
-            raise ValueError(f"compression must be 'none' or 'zstd', got {v!r}")
-        return v
 
 
 class TelegramCfg(_Base):
