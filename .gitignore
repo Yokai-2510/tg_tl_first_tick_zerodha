@@ -6,6 +6,9 @@ config/config.json
 .env
 .env.*
 !.env.example
+# Public backend URLs, deliberately tracked so any host builds correctly with no
+# dashboard configuration. Never put a token or secret in here.
+!.env.production
 
 # ---- Runtime data ----
 # Anchored with a leading slash: an unanchored "data/" also matches
