@@ -52,11 +52,26 @@ def mask(value: str) -> str:
     return f"{v[:3]}{'•' * 6}{v[-2:]} ({len(v)} chars)"
 
 
+def broker_section(creds: dict, broker: str) -> dict:
+    """The credential block for one broker, whichever layout the file uses.
+
+    Zerodha keys historically sit at the top level rather than under a "zerodha"
+    key, so a plain `creds[broker]` lookup finds nothing for the very broker that
+    is usually configured.
+    """
+    section = (creds or {}).get(broker)
+    if isinstance(section, dict):
+        return section
+    if broker == "zerodha":
+        return {k: v for k, v in (creds or {}).items() if not isinstance(v, dict)}
+    return {}
+
+
 def credential_view(creds: dict, brokers: list[str]) -> list[dict]:
     """A per-broker, per-field summary safe to send over the API."""
     out: list[dict] = []
     for broker in brokers:
-        section = (creds or {}).get(broker) or {}
+        section = broker_section(creds, broker) or {}
         fields = []
         for key, required in EXPECTED.get(broker, []):
             raw = str(section.get(key) or "")
@@ -207,4 +222,4 @@ def run_test(*, creds: dict, data_dir: str | Path, broker: str = "zerodha",
             "profile": profile, "capital": capital}
 
 
-__all__ = ["mask", "credential_view", "token_cache_state", "run_test", "EXPECTED"]
+__all__ = ["mask", "broker_section", "credential_view", "token_cache_state", "run_test", "EXPECTED"]

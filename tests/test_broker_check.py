@@ -185,3 +185,80 @@ def test_a_partial_failure_still_reports_the_checks_that_passed(tmp_path, monkey
     assert not by["margins"]["ok"] and "rate limited" in by["margins"]["detail"]
     assert by["instrument master (NFO)"]["ok"], "later checks must still run"
     assert res["capital"] is None
+
+
+# ------------------------------------------------- credential file layouts
+
+FLAT = {"api_key": "kitefx9f2a1234", "api_secret": "s3cr3tvalue0987",
+        "user_id": "AB1234", "password": "hunter2hunter2",
+        "totp_key": "JBSWY3DPEHPK3PXP",
+        "upstox": {"api_key": "u" * 12, "api_secret": "v" * 12,
+                   "redirect_uri": "https://example.com/cb"}}
+
+
+def test_flat_zerodha_keys_are_found():
+    """The deployed file puts Zerodha at the top level, not under "zerodha"."""
+    from backend.api.broker_check import broker_section
+    sec = broker_section(FLAT, "zerodha")
+    assert sec["api_key"] == "kitefx9f2a1234"
+    view = credential_view(FLAT, ["zerodha"])[0]
+    assert view["complete"], view["missing"]
+
+
+def test_a_nested_upstox_section_is_not_confused_with_zerodha_keys():
+    from backend.api.broker_check import broker_section
+    sec = broker_section(FLAT, "zerodha")
+    assert "upstox" not in sec, "the nested block must not leak into the flat view"
+    assert broker_section(FLAT, "upstox")["api_key"] == "u" * 12
+
+
+def test_both_credential_file_layouts_load(tmp_path):
+    """The example file used a nested zerodha block the loader would have rejected."""
+    import json
+    from backend.config.loader import load_credentials
+
+    flat = tmp_path / "flat.json"
+    flat.write_text(json.dumps(FLAT), encoding="utf-8")
+    a = load_credentials(flat)
+    assert a["api_key"] == "kitefx9f2a1234"
+    assert isinstance(a["upstox"], dict), "a nested section must stay a dict"
+
+    nested = tmp_path / "nested.json"
+    nested.write_text(json.dumps({
+        "zerodha": {k: FLAT[k] for k in
+                    ("api_key", "api_secret", "user_id", "password", "totp_key")},
+        "upstox": FLAT["upstox"],
+    }), encoding="utf-8")
+    b = load_credentials(nested)
+    assert b["api_key"] == "kitefx9f2a1234", "nested zerodha must be lifted"
+    assert isinstance(b["zerodha"], dict) and isinstance(b["upstox"], dict)
+
+
+def test_the_shipped_example_credentials_file_actually_loads():
+    """It is copied verbatim per the setup guide, so it must not raise."""
+    import json
+    import pathlib
+    import tempfile
+    from backend.config.loader import load_credentials
+
+    raw = json.loads(pathlib.Path("config/credentials.example.json")
+                     .read_text(encoding="utf-8"))
+    # Fill placeholders the way an operator would, keeping the file's own shape.
+    def fill(d):
+        return {k: (fill(v) if isinstance(v, dict)
+                    else ("x" * 12 if not k.startswith("_") else v))
+                for k, v in d.items()}
+    with tempfile.TemporaryDirectory() as td:
+        p = pathlib.Path(td) / "credentials.json"
+        p.write_text(json.dumps(fill(raw)), encoding="utf-8")
+        creds = load_credentials(p)
+    assert creds["api_key"], "example layout must yield usable Zerodha keys"
+
+
+def test_a_truly_incomplete_file_still_raises(tmp_path):
+    import json
+    from backend.config.loader import ConfigError, load_credentials
+    p = tmp_path / "bad.json"
+    p.write_text(json.dumps({"api_key": "only-this"}), encoding="utf-8")
+    with pytest.raises(ConfigError, match="missing required"):
+        load_credentials(p)

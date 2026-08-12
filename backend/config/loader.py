@@ -68,16 +68,46 @@ def load(path: Path | str = DEFAULT_CONFIG_PATH) -> Config:
     return parse(read_json(Path(path)))
 
 
-def load_credentials(path: Path | str = DEFAULT_CREDENTIALS_PATH) -> dict[str, str]:
-    """Read broker credentials. Never logged, never returned by the API."""
+#: Zerodha keys the login flow cannot work without.
+ZERODHA_REQUIRED = ("api_key", "api_secret", "user_id", "password", "totp_key")
+
+
+def load_credentials(path: Path | str = DEFAULT_CREDENTIALS_PATH) -> dict:
+    """Read broker credentials. Never logged, never returned by the API.
+
+    Two layouts exist in the wild and both are accepted:
+
+      * Zerodha keys at the TOP LEVEL, with other brokers in their own section --
+        what the deployed file actually looks like.
+      * Every broker in its own section, including `zerodha` -- what
+        credentials.example.json shows. A nested zerodha block is lifted to the top
+        level so callers that index creds["api_key"] keep working either way.
+
+    Nested sections are preserved as dicts. The previous `str(v)` over every value
+    silently turned the `upstox` block into the *repr of a dict*, so anything
+    reading it got a string and failed with 'str' object has no attribute 'get'.
+    """
     data = read_json(Path(path))
-    required = ("api_key", "api_secret", "user_id", "password", "totp_key")
-    missing = [k for k in required if not str(data.get(k, "")).strip()]
+
+    out: dict = {}
+    for key, value in data.items():
+        if key.startswith("_"):
+            continue
+        out[key] = dict(value) if isinstance(value, dict) else str(value)
+
+    nested = data.get("zerodha")
+    if isinstance(nested, dict):
+        for key, value in nested.items():
+            if not key.startswith("_"):
+                out.setdefault(key, str(value))
+
+    missing = [k for k in ZERODHA_REQUIRED if not str(out.get(k, "")).strip()]
     if missing:
         raise ConfigError(
-            f"{path} missing required field(s): {', '.join(missing)}"
+            f"{path} missing required field(s): {', '.join(missing)}. Put the Zerodha "
+            f"keys at the top level, or inside a \"zerodha\" section."
         )
-    return {k: str(v) for k, v in data.items() if not k.startswith("_")}
+    return out
 
 
 def merge_patch(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
