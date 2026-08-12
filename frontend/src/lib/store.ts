@@ -174,7 +174,7 @@ export const useStore = create<State>((set, get) => ({
 
 // ---------------------------------------------------------------- frames
 
-function applyFrame(f: any, set: any, get: () => State) {
+export function applyFrame(f: any, set: any, get: () => State) {
   const { topic, type, data } = f
   if (!topic) return
 
@@ -207,16 +207,36 @@ function applyFrame(f: any, set: any, get: () => State) {
       break
     }
 
+    // These three arrive BOTH ways: the initial snapshot is the whole list, then
+    // each later frame is one row. Treating a snapshot as a single row pushed the
+    // array itself in as one entry -- which is why the Orders tab showed a count
+    // of 1 and rendered `function at() { [native code] }`: the "row" was an array,
+    // and `row.at` resolved to Array.prototype.at. Array.isArray settles it
+    // regardless of what `type` says.
     case 'orders':
-      set({ orders: [data as OrderRow, ...get().orders].slice(0, 500) })
+      set({
+        orders: Array.isArray(data)
+          // The backend sends oldest-first; the table is newest-first, and later
+          // frames are prepended, so a snapshot has to be reversed to match.
+          ? ([...(data as OrderRow[])].reverse()).slice(0, 500)
+          : [data as OrderRow, ...get().orders].slice(0, 500),
+      })
       break
 
     case 'events':
-      set({ events: [...get().events, data as EventRow].slice(-500) })
+      set({
+        events: Array.isArray(data)
+          ? (data as EventRow[]).slice(-500)
+          : [...get().events, data as EventRow].slice(-500),
+      })
       break
 
     case 'logs':
-      set({ logs: [...get().logs, data as LogRow].slice(-500) })
+      set({
+        logs: Array.isArray(data)
+          ? (data as LogRow[]).slice(-500)
+          : [...get().logs, data as LogRow].slice(-500),
+      })
       break
   }
 }

@@ -1,14 +1,13 @@
 import { Link } from 'react-router-dom'
 import { useStore } from '../lib/store'
 import {
-  bytes, duration, int, money, pct, price, seconds, signClass, timeFromIso, DASH,
+  bytes, duration, int, money, pct, signClass, timeFromIso, DASH,
 } from '../lib/format'
-import { Card, KV, PhaseTimeline, Section, Stat, Table } from '../components/ui'
+import { Card, KV, PhaseTimeline, Stat } from '../components/ui'
 import CapitalCard from '../components/CapitalCard'
 
 export default function Dashboard() {
   const status = useStore((s) => s.status)
-  const positions = useStore((s) => s.positions)
   const events = useStore((s) => s.events)
   if (!status) return null
 
@@ -39,36 +38,7 @@ export default function Dashboard() {
       </div>
 
       <div className="grid gap-5 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <Section title="Open positions"
-            right={<Link to="/positions" className="text-micro text-accent">All positions →</Link>}>
-            <Table colSpan={7}
-              empty={emptyPositions(status.phase, status.schedule.trading_start)}
-              head={<>
-                <th className="th">Symbol</th>
-                <th className="th num">Qty</th>
-                <th className="th num">Entry</th>
-                <th className="th num">LTP</th>
-                <th className="th num">P&L</th>
-                <th className="th num">P&L %</th>
-                <th className="th num">Held</th>
-              </>}>
-              {positions.map((x) => (
-                <tr key={x.pos_id} className="hover:bg-surface/60">
-                  <td className="td font-medium">{x.instrument.tradingsymbol}</td>
-                  <td className="td num">{int(x.quantity)}</td>
-                  <td className="td num">{price(x.entry.price)}</td>
-                  <td className="td num">{price(x.live.ltp)}</td>
-                  <td className={`td num font-medium ${signClass(x.live.pnl)}`}>{money(x.live.pnl)}</td>
-                  <td className={`td num ${signClass(x.live.pnl_pct)}`}>{pct(x.live.pnl_pct)}</td>
-                  <td className="td num text-muted">{seconds(x.live.holding_seconds)}</td>
-                </tr>
-              ))}
-            </Table>
-          </Section>
-        </div>
-
-        <div className="space-y-3">
+        <div className="space-y-3 lg:col-span-3 lg:grid lg:grid-cols-3 lg:gap-5 lg:space-y-0">
           <CapitalCard cap={status.capital} />
 
           <Card label="Market feed">
@@ -119,10 +89,3 @@ export default function Dashboard() {
   )
 }
 
-function emptyPositions(phase: string, tradingStart: string): string {
-  if (phase === 'PHASE_1_FAIL') return 'No positions — pre-market checks failed, no trading today.'
-  if (['BOOT', 'IDLE'].includes(phase)) return `No positions. The session begins tomorrow; entries open at ${tradingStart}.`
-  if (['PHASE_1', 'FEED_LIVE', 'PREOPEN', 'SETTLEMENT', 'ARMING', 'FROZEN'].includes(phase))
-    return `No positions yet — entries open at ${tradingStart}.`
-  return 'No open positions.'
-}
