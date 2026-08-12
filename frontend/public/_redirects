@@ -1,4 +1,0 @@
-# SPA fallback. Client-side routes (/positions, /live, ...) have no file on disk,
-# so every path must serve index.html with a 200 (not a 301, or the URL changes).
-# Read by Cloudflare Pages AND Netlify. Copied into dist/ by Vite automatically.
-/*    /index.html   200
