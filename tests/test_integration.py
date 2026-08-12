@@ -647,3 +647,97 @@ def test_status_always_carries_the_sections_the_console_reads(harness):
     for key in ("available", "used", "total", "deployed_pct", "breakdown"):
         assert key in d["capital"], f"capital is missing {key}"
     assert isinstance(d["rate_limits"], dict) and d["rate_limits"]
+
+
+# ------------------------------------------- paper-mode position lifecycle
+
+def _tick(harness, token, ltp, *, bid=None, ask=None):
+    harness.feed.on_tick_batch(
+        [make_tick(token=token, ltp=ltp,
+                   bid=bid if bid is not None else ltp - 0.5,
+                   ask=ask if ask is not None else ltp + 0.5)],
+        recv_ns=mono_ns())
+
+
+def test_paper_position_survives_a_full_lifecycle(harness, client):
+    """Entry -> live P&L on ticks -> exit -> closed, with the API agreeing at
+    every step. Paper mode must never touch the broker order API."""
+    sig = _arm_and_fire(harness, ltp=158.0, ask=158.0, ref=117.85)
+    pos = harness.executor.execute_entry(sig)
+    assert pos.status is PositionStatus.ACTIVE
+    assert harness.kite.placed == [],         "paper mode reached the broker: place_order was called"
+
+    # Open via the API
+    assert len(client.get(f"{API_PREFIX}/positions").json()["data"]) == 1
+    assert client.get(f"{API_PREFIX}/positions/closed").json()["data"] == []
+
+    # A favourable tick must move unrealised P&L, not realised.
+    _tick(harness, pos.instrument.token, 175.0)
+    harness.book.update_prices(harness.feed.snapshot())
+    row = client.get(f"{API_PREFIX}/positions").json()["data"][0]
+    assert row["live"]["ltp"] == 175.0
+    assert row["live"]["pnl"] > 0, row["live"]
+    summary = client.get(f"{API_PREFIX}/status").json()["data"]["positions"]
+    assert summary["open"] == 1 and summary["realised"] == 0
+
+    # Close it.
+    assert harness.executor.request_exit(pos, ExitTrigger.MANUAL_API) is True
+    harness.executor.execute_exit(pos, ExitTrigger.MANUAL_API)
+    assert pos.status is not PositionStatus.ACTIVE
+
+    # And the books must move open -> closed everywhere.
+    assert client.get(f"{API_PREFIX}/positions").json()["data"] == []
+    closed = client.get(f"{API_PREFIX}/positions/closed").json()["data"]
+    assert len(closed) == 1 and closed[0]["pos_id"] == pos.pos_id
+    after = client.get(f"{API_PREFIX}/status").json()["data"]["positions"]
+    assert after["open"] == 0 and after["closed"] == 1
+    assert after["unrealised"] == 0, "a closed position cannot hold unrealised P&L"
+
+
+def test_exiting_twice_is_refused(harness):
+    """Double-clicking Exit must not send two exit orders."""
+    pos = harness.executor.execute_entry(_arm_and_fire(harness))
+    assert harness.executor.request_exit(pos, ExitTrigger.MANUAL_API) is True
+    assert harness.executor.request_exit(pos, ExitTrigger.MANUAL_API) is False
+
+
+def test_the_same_symbol_cannot_be_entered_twice(harness):
+    """max_per_symbol 1 stops pyramiding when a second signal arrives."""
+    first = harness.executor.execute_entry(_arm_and_fire(harness))
+    assert first is not None
+    harness.feed._armed[555].fired = False          # let it fire again
+    again = harness.executor.execute_entry(_arm_and_fire(harness))
+    assert again is None, "a second position on the same symbol was allowed"
+    assert len(harness.book.open_positions()) == 1
+
+
+def test_exit_all_closes_an_open_position(harness, client):
+    pos = harness.executor.execute_entry(_arm_and_fire(harness))
+    r = client.post(f"{API_PREFIX}/control/exit_all")
+    assert r.status_code == 200, r.text
+    assert harness.book.get(pos.pos_id).flags.exiting is True
+
+
+def test_the_kill_switch_halts_with_a_position_open(harness, client):
+    """Halting must not lose the position, and status must say so."""
+    pos = harness.executor.execute_entry(_arm_and_fire(harness))
+    harness.kill_switch()
+    d = client.get(f"{API_PREFIX}/status").json()["data"]
+    assert d["halted"] is True
+    assert d["positions"]["open"] == 1, "the open position must still be tracked"
+    assert harness.book.get(pos.pos_id) is not None
+
+
+def test_a_closed_session_reports_realised_and_no_open_risk(harness, client):
+    """After the last position closes, the dashboard must show zero exposure."""
+    pos = harness.executor.execute_entry(_arm_and_fire(harness))
+    _tick(harness, pos.instrument.token, 200.0)
+    harness.book.update_prices(harness.feed.snapshot())
+    harness.executor.request_exit(pos, ExitTrigger.TARGET)
+    harness.executor.execute_exit(pos, ExitTrigger.TARGET)
+
+    d = client.get(f"{API_PREFIX}/status").json()["data"]
+    assert d["positions"]["open"] == 0
+    assert d["positions"]["closed"] == 1
+    assert d["positions"]["unrealised"] == 0
+    assert d["capital"]["deployed_pct"] == 0, "nothing should read as deployed"
