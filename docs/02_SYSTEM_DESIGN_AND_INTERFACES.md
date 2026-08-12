@@ -288,7 +288,7 @@ version with rationale; the normative shape is:
                 "on":["PHASE_1_FAIL","FEED_LOSS","KILL_SWITCH","ORDER_REJECT","DISK_FULL"] },
 
   "api":      { "host":"0.0.0.0","port":8080,
-                "cors_origins":["https://your-app.vercel.app"],
+                "cors_origins":["https://your-project.pages.dev"],
                 "auth_token":"…","ws_push_interval_ms":250 },
 
   "paper":    { "starting_capital":1000000,"simulate_charges":true,"fill_model":"touch" }
@@ -827,7 +827,7 @@ cookies, and token handling straightforward. Keep C configured as a degraded fal
 ### 9.4 CORS
 
 ```
-api.cors_origins = ["https://your-app.vercel.app", "http://localhost:5173"]
+api.cors_origins = ["https://your-project.pages.dev", "https://*.your-project.pages.dev", "http://localhost:5173"]  # "*" in the host matches preview deploys
 ```
 Allowed methods `GET, POST, OPTIONS`; allowed headers `Authorization, Content-Type, Idempotency-Key`;
 credentials **not** used (bearer only). **Never ship `"*"` with a real auth token.**

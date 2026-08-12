@@ -4,7 +4,7 @@
 `FIRSTTICK_SYSTEM_IMPLEMENTATION_PLAN.md` (the plan).
 
 This guide is **operational**: provision the box, configure the network, run the service, expose it
-publicly with valid HTTPS **without buying a domain**, and connect the Vercel frontend.
+publicly with valid HTTPS **without buying a domain**, and host and connect the frontend.
 
 Target OS: **Ubuntu 22.04 / 24.04 LTS**, region **ap-south-1 (Mumbai)**.
 
@@ -20,7 +20,7 @@ EC2 (ap-south-1, Elastic IP)
                  ├─ REST  https://…/api/v1/...
                  └─ WS    wss://…/api/v1/ws
                       ▲
-                      └── Vercel SPA (https://your-app.vercel.app)
+                      └── static SPA (Cloudflare Pages / Netlify / Vercel)
 ```
 
 **Why:** `sslip.io` is a free public DNS service that resolves any IP encoded in the hostname
@@ -37,7 +37,7 @@ with **no domain purchase, no DNS panel, and no browser security overrides.**
 | AWS account | Region **ap-south-1** (closest to NSE) |
 | SSH keypair | `.pem`, `chmod 600` |
 | Zerodha Kite Connect | `api_key`, `api_secret`, TOTP seed. Kite Connect is a **paid** add-on (₹500/mo/app). |
-| Vercel account | For the frontend |
+| Cloudflare / Netlify / Vercel account | For the frontend (any one; all have free tiers) |
 | Local | `ssh`, `scp`, `git` |
 
 ---
@@ -161,7 +161,7 @@ in plaintext inside `Vijay915/login.py` should move here too, and that file's se
 "api": {
   "host": "127.0.0.1",                       // ← behind Caddy, NOT 0.0.0.0
   "port": 8080,
-  "cors_origins": ["https://your-app.vercel.app", "http://localhost:5173"],
+  "cors_origins": ["https://your-project.pages.dev", "https://*.your-project.pages.dev", "http://localhost:5173"],
   "auth_token": "<long random string>",      // openssl rand -hex 32
   "ws_push_interval_ms": 250
 },
@@ -371,32 +371,121 @@ Option 1 takes ten minutes and removes the problem permanently. Use it.
 
 ---
 
-## 7. Connect the frontend (Vercel)
+## 7. Host and connect the frontend
 
-### 7.1 Environment variables (Vercel → Settings → Environment Variables)
+The frontend is a **static SPA**: `npm run build` in `frontend/` emits `dist/`, and any
+static host can serve it. There is no server-side rendering and no API routes, so the
+host never talks to the broker — the browser talks straight to this EC2.
+
+### 7.1 Pick a host
+
+| Host | Free tier | Notes |
+|---|---|---|
+| **Cloudflare Pages** ← recommended | Unlimited bandwidth, unlimited sites, 500 builds/mo | Serves at the domain root, so no Vite `base` juggling. Reads `public/_redirects`. |
+| Netlify | 100 GB bandwidth, 300 build-min/mo | `frontend/netlify.toml` is committed — zero dashboard config. |
+| Vercel | 100 GB bandwidth | `frontend/vercel.json` is committed. New hostname per preview push. |
+| GitHub Pages | Unlimited for public repos | Serves under `/<repo>/`; needs `--base=/<repo>/` and `dist/404.html`. |
+| Hostinger / cPanel | **none** (paid only) | Works as a plain upload if you already pay for it — see 7.4. |
+
+All of them need the same three settings, because the repo root is the Python backend:
+
+| Setting | Value |
+|---|---|
+| Root / base directory | `frontend` |
+| Build command | `npm run build` |
+| Output directory | `dist` |
+
+### 7.2 Environment variables
 
 ```
 VITE_API_BASE = https://203-0-113-10.sslip.io/api/v1
 VITE_WS_URL   = wss://203-0-113-10.sslip.io/api/v1/ws
 ```
-Redeploy after changing these — Vite inlines them at build time.
 
-### 7.2 Backend CORS must list the exact Vercel origin
+Vite **inlines** these into the bundle at build time. They are not read at runtime, so
+changing one requires a **redeploy**, not a restart. Set them for Preview as well as
+Production or preview builds will point at nothing.
+
+### 7.3 SPA fallback — the 404-on-refresh trap
+
+Routes like `/positions` exist only in the browser; there is no such file on disk. A host
+that 404s instead of serving `index.html` gives a working site that breaks the moment
+anyone refreshes or opens a deep link. The config for this is already committed:
+
+| Host | File | Already in repo |
+|---|---|---|
+| Cloudflare Pages, Netlify | `frontend/public/_redirects` → `/* /index.html 200` | ✅ |
+| Netlify (full config) | `frontend/netlify.toml` | ✅ |
+| Vercel | `frontend/vercel.json` rewrite | ✅ |
+| Apache / Hostinger | `public_html/.htaccess` | see 7.4 |
+
+The status must be **200**, not a 301/302 — a redirect changes the URL in the address bar
+and loses the route.
+
+### 7.4 Cloudflare Pages, step by step
+
+1. Cloudflare dashboard → **Workers & Pages** → **Create** → **Pages** →
+   **Connect to Git**, authorise GitHub, pick `tg_tl_first_tick_zerodha`
+2. Build settings: preset **Vite**, root directory `frontend`,
+   build `npm run build`, output `dist`
+3. Add the two `VITE_*` variables (Production **and** Preview)
+4. **Save and Deploy** → you get `https://<project>.pages.dev`
+5. Put that origin in `cors_origins` (7.5) — until then the browser blocks everything
+
+### 7.5 Backend CORS must list the frontend origin
+
+This is the single most common reason a fresh deploy shows "failed to fetch" while curl
+against the same URL works perfectly: the browser blocks the request before it is sent,
+and nothing appears in the backend log at all.
 
 ```jsonc
 "api": { "cors_origins": [
-    "https://your-app.vercel.app",
-    "https://your-app-git-main-you.vercel.app",   // Vercel preview deploys differ!
+    "https://your-project.pages.dev",
+    "https://*.your-project.pages.dev",   // per-branch previews
     "http://localhost:5173"
 ]}
 ```
-Apply without restart: `POST /api/v1/config` — or `sudo systemctl restart firsttick`.
 
-> ⚠️ **Vercel preview deployments get a different hostname on every push.** Either add them
-> explicitly, or (dev only) allow the pattern. **Never ship `"*"`** while a real `auth_token` guards a
-> live trading API.
+A `*` in the host is expanded to an anchored pattern, so preview hostnames work without
+re-editing config on every push. Pin your project name — a bare `https://*.pages.dev`
+would admit anyone else's Pages project. **Never ship `"*"`** while a real `auth_token`
+guards a live trading API; the config layer refuses that combination outright.
 
-### 7.3 Connection sequence the client should follow
+Apply without a restart: `POST /api/v1/config` — or `sudo systemctl restart firsttick`.
+
+### 7.6 Hostinger / cPanel / any FTP host
+
+Hostinger has no free plan, but if you already have one it is a plain static upload:
+
+```bash
+cd frontend
+VITE_API_BASE=https://203-0-113-10.sslip.io/api/v1 VITE_WS_URL=wss://203-0-113-10.sslip.io/api/v1/ws npm run build
+```
+
+Upload the **contents** of `dist/` (not the folder) into `public_html`, then create
+`public_html/.htaccess`:
+
+```apache
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
+```
+
+Because the build is manual here, every config change means rebuilding and re-uploading.
+
+### 7.7 A note on serverless proxies
+
+Do **not** try to proxy the API through Vercel/Netlify serverless functions to avoid
+CORS. Their function runtimes cannot carry a long-lived WebSocket, so `/ws` would break
+and the console would fall back to 1-second REST polling permanently. Point the browser
+at the EC2 directly over `wss://` and fix CORS with 7.5 instead.
+
+### 7.8 Connection sequence the client should follow
 
 ```
 GET  /api/v1/health                     → reachable?
@@ -410,7 +499,7 @@ WS   wss://…/api/v1/ws?token=<ticket>
 on close → exponential backoff 1s→30s; after 3 failures fall back to polling /status every 1s
 ```
 
-### 7.4 Verify end-to-end
+### 7.9 Verify end-to-end
 
 ```bash
 TOKEN=<your auth_token>
@@ -420,9 +509,9 @@ curl -sS $BASE/health | jq                                    # 1. unauth health
 curl -sS -H "Authorization: Bearer $TOKEN" $BASE/status | jq   # 2. auth works
 curl -sS -o /dev/null -w '%{http_code}\n' $BASE/status         # 3. → 401 without token
 
-# 4. CORS preflight from the Vercel origin
+# 4. CORS preflight from the deployed origin
 curl -sS -i -X OPTIONS $BASE/status \
-  -H "Origin: https://your-app.vercel.app" \
+  -H "Origin: https://your-project.pages.dev" \
   -H "Access-Control-Request-Method: GET" \
   -H "Access-Control-Request-Headers: authorization" | grep -i access-control
 
@@ -502,7 +591,8 @@ aws s3 sync /opt/firsttick/data s3://<bucket>/firsttick/   # optional tick archi
 - [ ] `/status` returns 401 without a token
 
 **Frontend**
-- [ ] Vercel env vars set and redeployed
+- [ ] Frontend host env vars (`VITE_API_BASE`, `VITE_WS_URL`) set and redeployed
+- [ ] SPA fallback works: open `/positions` directly and refresh — no 404
 - [ ] Production **and** preview origins in `cors_origins`
 - [ ] Browser console: no mixed-content, no CORS errors
 - [ ] WS connects and streams; killing it falls back to polling

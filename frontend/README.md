@@ -23,20 +23,80 @@ npm run build       # tsc -b && vite build  ->  dist/
 npm run typecheck
 ```
 
-## Deploy to Vercel
+## Deploy
 
-1. Import the repo, set **Root Directory** to `frontend`.
-2. Framework preset: **Vite** (build `npm run build`, output `dist`).
-3. Environment variables:
-   ```
-   VITE_API_BASE = https://15-252-140-30.sslip.io/api/v1
-   VITE_WS_URL   = wss://15-252-140-30.sslip.io/api/v1/ws
-   ```
-   These are inlined at build time — changing one needs a redeploy.
-4. **Send the deployed URL to the backend owner** so it can be added to
-   `api.cors_origins`. Until then the browser blocks every request with a CORS
-   error, even though the backend is reachable. Vercel preview deployments get a
-   different hostname each push and each needs allow-listing too.
+This is a **static SPA** — `npm run build` produces `dist/`, which any static host
+can serve. Config for the common ones is committed, so nothing needs writing.
+
+Three settings matter everywhere:
+
+| | |
+|---|---|
+| **Root / base directory** | `frontend` (the repo root is a Python backend) |
+| **Build / output** | `npm run build` → `dist` |
+| **Env vars (build time)** | `VITE_API_BASE`, `VITE_WS_URL` — Vite **inlines** these, so they must be set for the build, not the runtime. Changing one requires a redeploy. |
+
+```
+VITE_API_BASE = https://15-252-140-30.sslip.io/api/v1
+VITE_WS_URL   = wss://15-252-140-30.sslip.io/api/v1/ws
+```
+
+### Cloudflare Pages — recommended free option
+Unlimited bandwidth and unlimited sites on the free plan; served at the root path.
+
+1. Workers & Pages → **Create** → **Pages** → Connect to Git → pick the repo
+2. Root directory `frontend` · Framework preset **Vite** · Build `npm run build`
+   · Output `dist`
+3. Add the two environment variables above (Production **and** Preview)
+4. Save and Deploy
+
+`public/_redirects` handles SPA routing automatically.
+
+### Netlify
+`netlify.toml` is committed with base, build, publish, env vars and the SPA
+redirect — import the repo and it needs no dashboard configuration. Free tier is
+100 GB bandwidth and 300 build-minutes a month.
+
+### Vercel
+Import the repo → Root Directory `frontend` → preset Vite → add the two env
+variables. `vercel.json` supplies the SPA rewrite. Note that each preview
+deployment gets a **different hostname**, and every one needs CORS allow-listing.
+
+### GitHub Pages
+Works, with one caveat: Pages serves from `https://<user>.github.io/<repo>/`, so
+the build needs a base path — `vite build --base=/tg_tl_first_tick_zerodha/` — and
+`dist/index.html` must be copied to `dist/404.html` for client-side routes.
+Cloudflare Pages avoids both problems by serving at the root.
+
+### Hostinger / cPanel / any FTP host
+Hostinger has **no free plan** — its shared hosting is paid. If you already have an
+account it works fine as a plain static upload:
+
+```bash
+cd frontend && npm run build      # produces dist/
+```
+Upload the **contents** of `dist/` into `public_html`, then add SPA fallback in
+`public_html/.htaccess`:
+
+```apache
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
+```
+
+Without that rule, refreshing on `/positions` returns a 404 — the file does not
+exist; only `index.html` does.
+
+### ⚠️ CORS — required on every host
+The backend allow-lists origins explicitly. **Send the deployed URL to the backend
+owner** to be added to `api.cors_origins`. Until then the browser blocks every
+request even though the backend is reachable and healthy. Add preview/branch
+hostnames too if you want those to work.
 
 ## Pages
 

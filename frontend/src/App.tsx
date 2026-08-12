@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { api, setUnauthorizedHandler } from './lib/api'
+import { API_BASE, api, configProblem, setUnauthorizedHandler } from './lib/api'
 import { clockIst } from './lib/format'
 import { useStore } from './lib/store'
 import { Banner, Confirm, PhasePill, Pill, StatusDot } from './components/ui'
@@ -49,6 +49,7 @@ export default function App() {
           ))}
         </nav>
         <main className="flex-1 min-w-0 p-4 md:p-5 overflow-x-hidden">
+          <div className="space-y-2 empty:hidden mb-4 empty:mb-0"><MisconfigBanner /></div>
           <Alerts />
           <Routes>
             <Route path="/" element={<Dashboard />} />
@@ -141,6 +142,13 @@ function Topbar() {
 
 // ---------------------------------------------------------------- alerts
 
+/** Shown on every screen, including the token gate — a bad build never reaches status. */
+function MisconfigBanner() {
+  const problem = configProblem()
+  if (!problem) return null
+  return <Banner tone="neg">Deployment misconfigured: {problem}</Banner>
+}
+
 function Alerts() {
   const status = useStore((s) => s.status)
   const link = useStore((s) => s.link)
@@ -202,7 +210,9 @@ function SignIn() {
 
   return (
     <div className="min-h-full grid place-items-center p-4">
-      <form onSubmit={go} className="card p-6 w-full max-w-sm space-y-4">
+      <div className="w-full max-w-sm space-y-3">
+      <MisconfigBanner />
+      <form onSubmit={go} className="card p-6 w-full space-y-4">
         <div>
           <div className="font-semibold text-[15px]">First-Tick Console</div>
           <div className="text-micro text-muted mt-0.5">Operator access token required.</div>
@@ -218,6 +228,10 @@ function SignIn() {
           Stored in this tab only. Never written to disk.
         </div>
       </form>
+      {/* Which backend this build points at -- the fastest way to spot a
+          frontend deployed with the wrong VITE_API_BASE. */}
+      <div className="text-[11px] text-muted text-center mono break-all">{API_BASE}</div>
+      </div>
     </div>
   )
 }

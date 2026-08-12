@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -34,15 +35,53 @@ def err(code: str, message: str, detail: Any = None) -> dict:
             "ts": now_ist().isoformat()}
 
 
+#: Fallback when nothing is configured — the Vite dev server.
+DEV_ORIGIN = "http://localhost:5173"
+
+
+def cors_settings(origins: list[str]) -> tuple[list[str], str | None]:
+    """Split configured origins into exact matches plus a regex for wildcards.
+
+    An exact allow-list cannot keep up with preview deployments: Vercel mints a new
+    hostname on every push, Cloudflare Pages and Netlify one per branch. So an entry
+    whose host contains `*` — `https://*.myproject.pages.dev` — is compiled into an
+    anchored regex instead.
+
+    `*` expands to `[^/]+`, which cannot contain a slash, so
+    `https://evil.com/x.pages.dev` does not match. It CAN span dots, meaning
+    `https://*.pages.dev` admits any project on that shared domain — prefer a
+    pattern that pins your own project name.
+
+    A bare `"*"` keeps its ordinary allow-any meaning; the config layer already
+    refuses that alongside a real auth_token.
+    """
+    exact: list[str] = []
+    patterns: list[str] = []
+    for origin in origins or []:
+        o = origin.strip().rstrip("/")
+        if not o:
+            continue
+        if o == "*" or "*" not in o:
+            exact.append(o)
+        else:
+            patterns.append(re.escape(o).replace(r"\*", "[^/]+"))
+    if not exact and not patterns:
+        exact.append(DEV_ORIGIN)
+    regex = "|".join(patterns) if patterns else None
+    return exact, regex
+
+
 def create_app(app_state) -> FastAPI:
     """Build the API. `app_state` is the live Application (see backend/main.py)."""
     api = FastAPI(title="TG/TL First-Tick", version="1.0.0", docs_url=f"{API_PREFIX}/docs")
     cfg = app_state.cfg
     hub: WsHub = app_state.hub
 
+    allow_origins, allow_origin_regex = cors_settings(cfg.api.cors_origins)
     api.add_middleware(
         CORSMiddleware,
-        allow_origins=cfg.api.cors_origins or ["http://localhost:5173"],
+        allow_origins=allow_origins,
+        allow_origin_regex=allow_origin_regex,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
@@ -284,4 +323,4 @@ def serve(app_state) -> None:
     threading.Thread(target=server.run, name="APIServer", daemon=True).start()
 
 
-__all__ = ["create_app", "serve", "API_PREFIX", "ok", "err"]
+__all__ = ["create_app", "serve", "cors_settings", "API_PREFIX", "ok", "err"]

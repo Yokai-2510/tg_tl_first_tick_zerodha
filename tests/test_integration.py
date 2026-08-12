@@ -440,3 +440,47 @@ def test_positions_appear_in_the_api(client, harness):
 
     r = client.post(f"{API_PREFIX}/positions/{rows[0]['pos_id']}/exit")
     assert r.status_code == 200 and r.json()["data"]["exiting"] is True
+
+
+# ---------------------------------------------------------------- CORS
+
+def _preflight(harness, origins: list[str], origin: str):
+    """A real browser preflight, through the middleware create_app installed."""
+    harness.cfg.api.cors_origins = origins
+    with TestClient(create_app(harness)) as c:
+        return c.options(
+            f"{API_PREFIX}/status",
+            headers={"Origin": origin,
+                     "Access-Control-Request-Method": "GET",
+                     "Access-Control-Request-Headers": "Authorization"},
+        )
+
+
+def test_preflight_allows_an_exact_origin(harness):
+    r = _preflight(harness, ["https://console.example.com"],
+                   "https://console.example.com")
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == "https://console.example.com"
+
+
+def test_preflight_allows_a_wildcard_preview_origin(harness):
+    """create_app must actually forward allow_origin_regex, not just compute it."""
+    r = _preflight(harness, ["https://*.first-tick.pages.dev"],
+                   "https://feature-x.first-tick.pages.dev")
+    assert r.status_code == 200
+    assert (r.headers["access-control-allow-origin"]
+            == "https://feature-x.first-tick.pages.dev")
+
+
+def test_preflight_rejects_an_unlisted_origin(harness):
+    r = _preflight(harness, ["https://*.first-tick.pages.dev"], "https://evil.com")
+    assert "access-control-allow-origin" not in r.headers
+
+
+def test_get_from_an_allowed_origin_carries_the_header(harness):
+    """Without this header on the real response the browser discards the body."""
+    harness.cfg.api.cors_origins = ["https://*.pages.dev"]
+    with TestClient(create_app(harness)) as c:
+        r = c.get(f"{API_PREFIX}/health", headers={"Origin": "https://a.pages.dev"})
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == "https://a.pages.dev"

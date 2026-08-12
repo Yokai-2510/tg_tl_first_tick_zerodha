@@ -11,6 +11,38 @@ export const API_BASE: string =
 export const WS_URL: string =
   (import.meta.env.VITE_WS_URL as string) ?? 'ws://127.0.0.1:8080/api/v1/ws'
 
+/**
+ * Why this check exists: Vite inlines `VITE_API_BASE` at BUILD time. A host that
+ * was never given the variable silently ships the localhost fallback above, and
+ * the deployed page then tries to reach the *visitor's own* machine over plain
+ * http from an https page. The browser blocks it as mixed content before any
+ * request leaves, so the console shows a bare "Failed to fetch" that looks
+ * identical to the backend being down. Naming the real cause saves hours.
+ *
+ * Returns null when the configuration is sane. The arguments exist so the rule can
+ * be exercised without a browser; callers pass nothing.
+ */
+export function configProblem(
+  pageProtocol: string = typeof location === 'undefined' ? 'http:' : location.protocol,
+  apiBase: string = API_BASE,
+  wsUrl: string = WS_URL,
+): string | null {
+  if (pageProtocol !== 'https:') return null   // local dev over http is fine
+  const local = /\/\/(127\.0\.0\.1|localhost|\[::1\])([:/]|$)/
+  if (local.test(apiBase) || local.test(wsUrl)) {
+    return `This build has no VITE_API_BASE — it is pointing at ${apiBase}, ` +
+      `which is your own machine. Set VITE_API_BASE and VITE_WS_URL in the ` +
+      `hosting provider's environment variables and redeploy (Vite inlines them ` +
+      `at build time, so a restart is not enough).`
+  }
+  if (apiBase.startsWith('http://') || wsUrl.startsWith('ws://')) {
+    return `This page is served over https but the API is configured as ` +
+      `${apiBase}. The browser will block that as mixed content. Use https:// ` +
+      `and wss:// URLs (see docs/04 §6 for TLS without buying a domain).`
+  }
+  return null
+}
+
 const TOKEN_KEY = 'ft.token'
 
 export const auth = {
