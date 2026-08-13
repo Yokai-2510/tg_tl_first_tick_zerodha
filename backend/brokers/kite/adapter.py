@@ -151,7 +151,9 @@ class KiteBroker:
         return korders.read_history(self.kite, order_id)
 
     def positions(self) -> dict[str, dict]:
-        data = portfolio.positions(self.kite, limiter=self.limiter)
+        # strict: this feeds reconciliation, where an empty result is interpreted as
+        # "closed at the broker". A failure must propagate, not look like no positions.
+        data = portfolio.positions(self.kite, limiter=self.limiter, strict=True)
         return {sym: {"quantity": int(r.get("quantity") or 0),
                       "average_price": float(r.get("average_price") or 0.0),
                       "last_price": float(r.get("last_price") or 0.0),

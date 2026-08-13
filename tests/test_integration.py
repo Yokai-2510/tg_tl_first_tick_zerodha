@@ -173,8 +173,9 @@ class Harness:
         self.feed.disarm()
         return self.exit_all(ExitTrigger.MANUAL_API)
 
-    def reconcile_now(self):
-        return {"confirmed": [], "closed_externally": [], "qty_drift": [], "adopted": []}
+    # Another drifted stub: this returned a fixed empty report, so nothing ever
+    # exercised the real reconciliation -- including the path that closes positions.
+    reconcile_now = Application.reconcile_now
 
     def edit_manual(self, action, symbol, body):
         return {"manual_instruments": [{"symbol": symbol}]}
@@ -741,3 +742,125 @@ def test_a_closed_session_reports_realised_and_no_open_risk(harness, client):
     assert d["positions"]["closed"] == 1
     assert d["positions"]["unrealised"] == 0
     assert d["capital"]["deployed_pct"] == 0, "nothing should read as deployed"
+
+
+def test_a_failed_positions_fetch_never_closes_open_positions(harness):
+    """The dangerous path: reconcile treats a symbol missing from the broker view as
+    closed-at-the-broker. If the fetch itself failed and returned an empty dict, the
+    bot would abandon every live position -- marked closed locally, still open at the
+    broker, with no stop-loss, no trailing and no EOD square-off."""
+    from backend.brokers.kite import portfolio as kportfolio
+
+    pos = harness.executor.execute_entry(_arm_and_fire(harness))
+    assert pos.is_open
+
+    class BrokenKite:
+        def positions(self):
+            raise RuntimeError("Kite 502 Bad Gateway")
+
+    harness.kite = BrokenKite()
+    report = harness.reconcile_now()
+
+    assert report.get("skipped") is True, report
+    assert "502" in report.get("error", "")
+    assert harness.book.get(pos.pos_id).is_open, \
+        "a transient API failure closed a live position"
+    assert len(harness.book.open_positions()) == 1
+
+
+def test_positions_strict_raises_instead_of_reporting_an_empty_book():
+    from backend.brokers.kite import portfolio as kportfolio
+
+    class BrokenKite:
+        def positions(self):
+            raise RuntimeError("boom")
+
+    assert kportfolio.positions(BrokenKite()) == {"day": [], "net": []}
+    with pytest.raises(RuntimeError):
+        kportfolio.positions(BrokenKite(), strict=True)
+
+
+def test_a_genuinely_empty_broker_view_still_closes_locally(harness):
+    """The flip side: when the broker really has nothing, closing locally is right."""
+    pos = harness.executor.execute_entry(_arm_and_fire(harness))
+
+    class EmptyKite:
+        def positions(self):
+            return {"day": [], "net": []}
+
+    harness.kite = EmptyKite()
+    report = harness.reconcile_now()
+    assert not report.get("skipped")
+    assert pos.pos_id in report["closed_externally"]
+
+
+# ------------------------------------- max_per_symbol counts by UNDERLYING
+
+def _fire_symbol(harness, token, tradingsymbol, underlying, *, ltp=100.0, ref=90.0):
+    """Arm and fire one specific contract, returning its signal."""
+    inst = make_instrument(token=token, tradingsymbol=tradingsymbol,
+                           underlying=underlying)
+    harness.instruments[inst.token] = inst
+    harness.by_symbol[inst.tradingsymbol] = inst
+    harness.feed.arm([inst], {inst.token: ref})
+    harness.feed.phase = Phase.TRADING
+    harness.feed.enable_entries(fire_after_ns=0, deadline_ns=10 ** 18,
+                                session_prefix=f"s{token}_")
+    harness.feed.on_tick_batch(
+        [make_tick(token=token, ltp=ltp, ask=ltp, bid=ltp - 0.5)], recv_ns=mono_ns())
+    return harness.feed.intent_q.get_nowait()
+
+
+def test_a_second_strike_on_the_same_underlying_is_refused(harness):
+    """13 Aug opened NIFTY 24300/24350/24400/24650 CE in one session because the
+    cap was keyed on the option tradingsymbol, and every strike differs."""
+    a = harness.executor.execute_entry(
+        _fire_symbol(harness, 901, "NIFTY2681824350CE", "NIFTY"))
+    assert a is not None
+    b = harness.executor.execute_entry(
+        _fire_symbol(harness, 902, "NIFTY2681824400CE", "NIFTY"))
+    assert b is None, "a second NIFTY strike was allowed"
+    assert len(harness.book.open_positions()) == 1
+
+
+def test_opposite_sides_of_one_underlying_cannot_both_open(harness):
+    """TECHM 1680CE and 1660PE ran together on 13 Aug -- contradictory bets."""
+    ce = harness.executor.execute_entry(
+        _fire_symbol(harness, 911, "TECHM26AUG1680CE", "TECHM"))
+    assert ce is not None
+    pe = harness.executor.execute_entry(
+        _fire_symbol(harness, 912, "TECHM26AUG1660PE", "TECHM"))
+    assert pe is None, "CE and PE on the same underlying both opened"
+
+
+def test_a_different_underlying_still_opens(harness):
+    """The cap must not block genuine diversification."""
+    assert harness.executor.execute_entry(
+        _fire_symbol(harness, 921, "NIFTY2681824350CE", "NIFTY")) is not None
+    assert harness.executor.execute_entry(
+        _fire_symbol(harness, 922, "HINDALCO26AUG1020CE", "HINDALCO")) is not None
+    assert len(harness.book.open_positions()) == 2
+
+
+def test_underlying_match_is_case_insensitive(harness):
+    assert harness.book.count_for_underlying("nifty") == 0
+    harness.executor.execute_entry(
+        _fire_symbol(harness, 931, "NIFTY2681824350CE", "NIFTY"))
+    assert harness.book.count_for_underlying("nifty") == 1
+    assert harness.book.count_for_underlying("NIFTY") == 1
+
+
+def test_the_slot_frees_after_the_position_closes(harness):
+    pos = harness.executor.execute_entry(
+        _fire_symbol(harness, 941, "NIFTY2681824350CE", "NIFTY"))
+    harness.executor.request_exit(pos, ExitTrigger.MANUAL_API)
+    harness.executor.execute_exit(pos, ExitTrigger.MANUAL_API)
+    assert harness.book.count_for_underlying("NIFTY") == 0
+    assert harness.executor.execute_entry(
+        _fire_symbol(harness, 942, "NIFTY2681824400CE", "NIFTY")) is not None
+
+
+def test_can_open_without_an_underlying_keeps_the_old_contract_behaviour(harness):
+    """Older callers pass only a tradingsymbol; they must not start failing."""
+    ok, why = harness.book.can_open("ANYTHING26AUG100CE")
+    assert ok is True, why

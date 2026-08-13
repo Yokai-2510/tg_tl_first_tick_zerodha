@@ -115,7 +115,7 @@ class Executor:
 
     def execute_entry(self, sig: Signal) -> Position | None:
         entry = self.cfg.entry
-        allowed, reason = self.book.can_open(sig.tradingsymbol)
+        allowed, reason = self.book.can_open(sig.tradingsymbol, sig.underlying)
         if not allowed:
             self._info(f"entry skipped {sig.tradingsymbol}: {reason}")
             return None

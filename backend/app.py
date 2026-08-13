@@ -529,7 +529,17 @@ class Application:
     def reconcile_now(self) -> dict:
         if self.kite is None:
             return {}
-        data = kportfolio.positions(self.kite, limiter=self.limiter)
+        # strict, and abort on failure. A failed fetch must never be read as "the
+        # broker has no positions" -- reconcile would close every open position
+        # locally while they stay live at the broker, unmanaged.
+        try:
+            data = kportfolio.positions(self.kite, limiter=self.limiter, strict=True)
+        except Exception as exc:
+            self.log.error(
+                f"reconcile skipped: could not read broker positions ({exc}). "
+                f"Local positions left untouched."
+            )
+            return {"error": str(exc), "skipped": True}
         report = self.book.reconcile(
             kportfolio.day_position_map(data),
             instrument_lookup=self.by_symbol,

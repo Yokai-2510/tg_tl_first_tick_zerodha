@@ -11,13 +11,27 @@ from __future__ import annotations
 from typing import Any
 
 
-def positions(kite: Any, *, limiter=None) -> dict[str, list[dict]]:
-    """`{"day": [...], "net": [...]}`; empty on failure rather than raising."""
+def positions(kite: Any, *, limiter=None, strict: bool = False) -> dict[str, list[dict]]:
+    """`{"day": [...], "net": [...]}`.
+
+    `strict` matters more here than anywhere else. Reconciliation treats a symbol
+    absent from the broker view as "closed at the broker" and closes it locally --
+    so an empty dict returned because the API call FAILED makes the bot abandon
+    every open position: marked closed locally, still open at the broker, with no
+    stop-loss, no trailing and no EOD square-off. A caller that reconciles must
+    pass strict=True and skip the pass entirely when it raises.
+    """
     if limiter is not None:
         limiter.acquire("other", timeout=2.0)
     try:
         data = kite.positions()
     except Exception:
+        if strict:
+            raise
+        return {"day": [], "net": []}
+    if data is None:
+        if strict:
+            raise PositionsUnavailable("the broker returned no positions payload")
         return {"day": [], "net": []}
     return {"day": list(data.get("day") or []), "net": list(data.get("net") or [])}
 
@@ -56,6 +70,10 @@ def margins(kite: Any, *, limiter=None, strict: bool = False) -> dict:
             "the broker returned no equity block; treating this as a failure rather "
             "than reporting zero capital")
     return data
+
+
+class PositionsUnavailable(RuntimeError):
+    """The positions call did not return usable data. Never means "no positions"."""
 
 
 class MarginsUnavailable(RuntimeError):
@@ -127,5 +145,6 @@ def net_quantity(row: dict) -> int:
 
 
 __all__ = ["positions", "orders", "margins", "MarginsUnavailable",
+           "PositionsUnavailable",
            "available_cash", "capital",
            "day_position_map", "net_quantity"]

@@ -69,17 +69,45 @@ class PositionBook:
                     if p.status is PositionStatus.CLOSED]
 
     def count_for_symbol(self, tradingsymbol: str) -> int:
+        """Open positions in this exact contract."""
         with self._lock:
             return sum(1 for p in self._by_id.values()
                        if p.tradingsymbol == tradingsymbol and p.is_open)
 
-    def can_open(self, tradingsymbol: str) -> tuple[bool, str]:
-        """Concurrency guards. Returns (allowed, reason_if_not)."""
+    def count_for_underlying(self, underlying: str) -> int:
+        """Open positions on this UNDERLYING, across every strike and both sides."""
+        name = (underlying or "").upper()
+        with self._lock:
+            return sum(1 for p in self._by_id.values()
+                       if p.is_open
+                       and (p.instrument.underlying or "").upper() == name)
+
+    def can_open(self, tradingsymbol: str,
+                 underlying: str | None = None) -> tuple[bool, str]:
+        """Concurrency guards. Returns (allowed, reason_if_not).
+
+        max_per_symbol counts by UNDERLYING, not by contract. Keyed on the option
+        tradingsymbol it did nothing useful: on 13 Aug a single session opened four
+        NIFTY strikes (24300/24350/24400/24650 CE), three TECHM and three
+        KOTAKBANK, because every strike is a different tradingsymbol. It also let
+        TECHM 1680CE and 1660PE run together -- opposite directional bets on one
+        name -- and burned the max_concurrent budget on a handful of underlyings
+        while genuine signals elsewhere were skipped.
+
+        `underlying` is optional so older callers keep working; when omitted the
+        check falls back to the contract-level count it used to do.
+        """
         with self._lock:
             if len(self.open_positions()) >= self.max_concurrent:
                 return False, f"max_concurrent ({self.max_concurrent}) reached"
-            if self.count_for_symbol(tradingsymbol) >= self.max_per_symbol:
-                return False, f"max_per_symbol ({self.max_per_symbol}) reached for {tradingsymbol}"
+            if underlying:
+                held = self.count_for_underlying(underlying)
+                if held >= self.max_per_symbol:
+                    return False, (f"max_per_symbol ({self.max_per_symbol}) reached "
+                                   f"for {underlying} ({held} open)")
+            elif self.count_for_symbol(tradingsymbol) >= self.max_per_symbol:
+                return False, (f"max_per_symbol ({self.max_per_symbol}) reached "
+                               f"for {tradingsymbol}")
             return True, ""
 
     # -- mutation ----------------------------------------------------------
