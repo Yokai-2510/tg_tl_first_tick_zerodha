@@ -195,8 +195,6 @@ export const SETTINGS: Section[] = [
     doc: 'Which broker supplies data, which one places orders, and how the feed behaves. The two are independent — data on one broker with orders on paper touches no live key at all.',
     structural: true,
     fields: [
-      { path: 'broker.data_broker', label: 'data_broker', type: 'enum', options: ['zerodha', 'upstox'], doc: 'Supplies the feed, instrument master and quotes.' },
-      { path: 'broker.trade_broker', label: 'trade_broker', type: 'enum', options: ['zerodha', 'upstox', 'paper'], doc: 'Places orders. paper touches no broker key.' },
       { path: 'broker.api_key', label: 'api_key', type: 'string', doc: 'Broker API key. The secret lives in credentials.json, never here.' },
       { path: 'broker.product.stock_options', label: 'product.stock_options', type: 'enum', options: ['NRML', 'MIS'], doc: 'NRML avoids the physical-settlement block on stock options.' },
       { path: 'broker.product.index_options', label: 'product.index_options', type: 'enum', options: ['MIS', 'NRML'], doc: 'Index options are cash-settled, so MIS is fine.' },
@@ -302,19 +300,6 @@ export const CREDENTIAL_GROUPS: { title: string; file: string; rows: [string, st
       ['user_id', 'Kite login ID used for the daily session exchange.'],
       ['password', 'Account password, used only by the automated login.'],
       ['totp_key', 'Base32 seed for the two-factor code.'],
-    ],
-  },
-  {
-    title: 'Upstox',
-    file: 'credentials.json → upstox',
-    rows: [
-      ['api_key', 'Upstox API key. Only needed if a broker field names upstox.'],
-      ['api_secret', 'Paired secret.'],
-      ['redirect_uri', 'Where Upstox sends the auth code after login.'],
-      ['mobile_no', 'Registered mobile, for the unattended login.'],
-      ['totp_key', 'Base32 seed for the two-factor code.'],
-      ['pin', 'Account PIN.'],
-      ['access_token', 'Daily token. Expires at 03:30 IST; leave blank to have it exchanged.'],
     ],
   },
   {

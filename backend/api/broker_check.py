@@ -30,11 +30,6 @@ EXPECTED = {
         ("api_key", True), ("api_secret", True), ("user_id", True),
         ("password", True), ("totp_key", True),
     ],
-    "upstox": [
-        ("api_key", True), ("api_secret", True), ("redirect_uri", True),
-        ("mobile_no", False), ("totp_key", False), ("pin", False),
-        ("access_token", False), ("auth_code", False),
-    ],
 }
 
 

@@ -114,10 +114,10 @@ class ProductCfg(_Base):
 class BrokerCfg(_Base):
     """Data and trading brokers are chosen INDEPENDENTLY.
 
-    `data_broker`  : zerodha | upstox   — feed, instrument master, quotes
-    `trade_broker` : zerodha | upstox | paper — orders and the position book
+    `data_broker`  : zerodha           — feed, instrument master, quotes
+    `trade_broker` : zerodha | paper   — orders and the position book
 
-    Splitting them is useful in practice: running data on Upstox with
+    Splitting them is useful in practice: running data on one broker with
     `trade_broker: paper` touches no Zerodha API key at all, so it cannot
     disturb another system already using that key.
     """

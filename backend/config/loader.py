@@ -84,7 +84,7 @@ def load_credentials(path: Path | str = DEFAULT_CREDENTIALS_PATH) -> dict:
         level so callers that index creds["api_key"] keep working either way.
 
     Nested sections are preserved as dicts. The previous `str(v)` over every value
-    silently turned the `upstox` block into the *repr of a dict*, so anything
+    silently turned any nested block into the *repr of a dict*, so anything
     reading it got a string and failed with 'str' object has no attribute 'get'.
     """
     data = read_json(Path(path))

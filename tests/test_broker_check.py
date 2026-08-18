@@ -80,12 +80,6 @@ def test_an_absent_broker_section_reports_incomplete_not_crash():
     assert all(not f["present"] for f in view["fields"])
 
 
-def test_optional_upstox_fields_do_not_block_completeness():
-    ups = {"upstox": {"api_key": "k" * 12, "api_secret": "s" * 12,
-                      "redirect_uri": "https://example.com/cb"}}
-    view = credential_view(ups, ["upstox"])[0]
-    assert view["complete"], view["missing"]
-
 
 # -------------------------------------------------------------- token cache
 
@@ -117,7 +111,8 @@ def test_incomplete_credentials_fail_fast_without_touching_the_network(tmp_path)
 
 
 def test_an_unsupported_broker_says_so_rather_than_pretending(tmp_path):
-    res = run_test(creds=FULL, data_dir=tmp_path, broker="upstox")
+    """Zerodha is the only broker now; anything else must say so, not pretend."""
+    res = run_test(creds=FULL, data_dir=tmp_path, broker="someotherbroker")
     assert res["ok"] is False
     assert "no test path" in res["checks"][0]["detail"]
 
@@ -192,8 +187,7 @@ def test_a_partial_failure_still_reports_the_checks_that_passed(tmp_path, monkey
 FLAT = {"api_key": "kitefx9f2a1234", "api_secret": "s3cr3tvalue0987",
         "user_id": "AB1234", "password": "hunter2hunter2",
         "totp_key": "JBSWY3DPEHPK3PXP",
-        "upstox": {"api_key": "u" * 12, "api_secret": "v" * 12,
-                   "redirect_uri": "https://example.com/cb"}}
+        "broker_notes": {"free_form": "a nested block that is not a credential"}}
 
 
 def test_flat_zerodha_keys_are_found():
@@ -205,12 +199,6 @@ def test_flat_zerodha_keys_are_found():
     assert view["complete"], view["missing"]
 
 
-def test_a_nested_upstox_section_is_not_confused_with_zerodha_keys():
-    from backend.api.broker_check import broker_section
-    sec = broker_section(FLAT, "zerodha")
-    assert "upstox" not in sec, "the nested block must not leak into the flat view"
-    assert broker_section(FLAT, "upstox")["api_key"] == "u" * 12
-
 
 def test_both_credential_file_layouts_load(tmp_path):
     """The example file used a nested zerodha block the loader would have rejected."""
@@ -221,17 +209,16 @@ def test_both_credential_file_layouts_load(tmp_path):
     flat.write_text(json.dumps(FLAT), encoding="utf-8")
     a = load_credentials(flat)
     assert a["api_key"] == "kitefx9f2a1234"
-    assert isinstance(a["upstox"], dict), "a nested section must stay a dict"
+    assert isinstance(a["broker_notes"], dict), "a nested section must stay a dict"
 
     nested = tmp_path / "nested.json"
     nested.write_text(json.dumps({
         "zerodha": {k: FLAT[k] for k in
                     ("api_key", "api_secret", "user_id", "password", "totp_key")},
-        "upstox": FLAT["upstox"],
     }), encoding="utf-8")
     b = load_credentials(nested)
     assert b["api_key"] == "kitefx9f2a1234", "nested zerodha must be lifted"
-    assert isinstance(b["zerodha"], dict) and isinstance(b["upstox"], dict)
+    assert isinstance(b["zerodha"], dict)
 
 
 def test_the_shipped_example_credentials_file_actually_loads():

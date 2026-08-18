@@ -33,7 +33,7 @@ class Instrument:
     each broker's native identifier, which differ in both format and value:
 
         Kite    instrument_token  1234567          -> "1234567"
-        Upstox  instrument_key    "NSE_FO|49520"
+        (other brokers use string keys such as "NSE_FO|49520")
 
     When data and trading use different brokers, `trade_key` is resolved by
     matching the exchange-level contract identity (underlying, expiry, strike,
@@ -46,7 +46,7 @@ class Instrument:
     underlying: str
     kind: InstrumentKind
     lot_size: int = 1
-    tick_size: float = 0.05                  # ALWAYS rupees (Upstox reports paise)
+    tick_size: float = 0.05                  # ALWAYS rupees
     instrument_type: str | None = None       # CE | PE | EQ | FUT | None
     strike: float = 0.0
     expiry: date | None = None

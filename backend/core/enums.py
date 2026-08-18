@@ -237,14 +237,12 @@ class DataBroker(StrEnum):
     """Who supplies the feed, instrument master and quotes."""
 
     ZERODHA = "zerodha"
-    UPSTOX = "upstox"
 
 
 class TradeBroker(StrEnum):
     """Who receives orders. `paper` touches no broker order API at all."""
 
     ZERODHA = "zerodha"
-    UPSTOX = "upstox"
     PAPER = "paper"
 
 

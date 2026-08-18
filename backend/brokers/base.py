@@ -6,7 +6,7 @@ Two independent roles, selectable per broker in config:
     data_broker   provides the live feed, the instrument master and REST quotes
     trade_broker  places, modifies and cancels orders, and owns the position book
 
-They can be the SAME broker or DIFFERENT ones. Running data on Upstox while
+They can be the SAME broker or DIFFERENT ones -- in practice data on Zerodha while
 trading on Zerodha (or paper) is explicitly supported, and is the cleanest way
 to test without touching a Zerodha API key that another system is using.
 
@@ -57,7 +57,7 @@ from ..core.models import Instrument, OrderResult
 def surrogate_token(broker_key: str) -> int:
     """Stable 56-bit integer id derived from a broker's native string key.
 
-    Kite identifies instruments with an int; Upstox uses a string like
+    Kite identifies instruments with an int; other brokers use strings like
     `NSE_FO|49520`. The engine keys everything by int, so string-keyed brokers
     get a deterministic surrogate.
 
@@ -94,7 +94,7 @@ _STATUS_ALIASES: dict[str, str] = {
     "CANCELLED": OrderStatus.CANCELLED,
     "CANCELED": OrderStatus.CANCELLED,
     "OPEN": OrderStatus.OPEN,
-    # Upstox spellings.
+    # Alternate broker spellings.
     "COMPLETED": OrderStatus.COMPLETE,
     "FILLED": OrderStatus.COMPLETE,
     "OPEN PENDING": OrderStatus.OPEN_PENDING,

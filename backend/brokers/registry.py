@@ -7,7 +7,7 @@ arrives keyed by the data broker, but orders must be addressed to the trade
 broker.
 
 Tradingsymbols are NOT reliable for this match — Kite writes
-`INDIGO26AUG5300PE`, Upstox writes `INDIGO 26 AUG 5300 PE`. The match is done
+`INDIGO26AUG5300PE`, other brokers space it out. The match is done
 on the exchange-level contract identity instead: (underlying, expiry, strike,
 option type).
 """
@@ -22,11 +22,10 @@ from ..core.models import Instrument
 from .base import BrokerError, contract_key
 
 ZERODHA = "zerodha"
-UPSTOX = "upstox"
 PAPER = "paper"
 
-SUPPORTED_DATA = (ZERODHA, UPSTOX)
-SUPPORTED_TRADE = (ZERODHA, UPSTOX, PAPER)
+SUPPORTED_DATA = (ZERODHA,)
+SUPPORTED_TRADE = (ZERODHA, PAPER)
 
 
 def make_broker(name: str, credentials: dict, *, cache_dir: Path,
@@ -37,10 +36,6 @@ def make_broker(name: str, credentials: dict, *, cache_dir: Path,
         from .kite.adapter import KiteBroker
         return KiteBroker(credentials, cache_dir=cache_dir, limiter=limiter,
                           ws_cfg=ws_cfg)
-    if key == UPSTOX:
-        from .upstox.adapter import UpstoxBroker
-        return UpstoxBroker(credentials, cache_dir=cache_dir, limiter=limiter,
-                            ws_cfg=ws_cfg)
     raise BrokerError(
         f"unknown broker {name!r}; supported: {', '.join(SUPPORTED_DATA)}"
     )
@@ -49,7 +44,7 @@ def make_broker(name: str, credentials: dict, *, cache_dir: Path,
 def credentials_for(broker: str, all_credentials: dict) -> dict:
     """Pull one broker's credential block.
 
-    Accepts either a nested layout (`{"zerodha": {...}, "upstox": {...}}`) or a
+    Accepts either a nested layout (`{"zerodha": {...}}`) or a
     flat one, so an existing single-broker credentials file keeps working.
     """
     key = str(broker).strip().lower()
@@ -158,4 +153,4 @@ def build_pair(cfg, credentials: dict, *, cache_dir: Path, limiter=None) -> Brok
 
 
 __all__ = ["make_broker", "build_pair", "credentials_for", "BrokerPair",
-           "ZERODHA", "UPSTOX", "PAPER", "SUPPORTED_DATA", "SUPPORTED_TRADE"]
+           "ZERODHA", "PAPER", "SUPPORTED_DATA", "SUPPORTED_TRADE"]

@@ -24,7 +24,7 @@
   },
 
   "broker": {
-    "_doc": "Broker selection + order settings. data_broker (zerodha|upstox) supplies the feed, instrument master and quotes; trade_broker (zerodha|upstox|paper) places orders. They are INDEPENDENT -- data on upstox with trade_broker=paper touches no Zerodha key at all. product is per instrument class: stock options use NRML to avoid the MIS physical-settlement block; index options are cash-settled so MIS is fine. rate_limits mirror Kite's documented caps and are enforced locally.",
+    "_doc": "Broker selection + order settings. data_broker supplies the feed, instrument master and quotes; trade_broker places orders. trade_broker=paper places no broker order at all. product is per instrument class: stock options use NRML to avoid the MIS physical-settlement block; index options are cash-settled so MIS is fine. rate_limits mirror Kite's documented caps and are enforced locally.",
     "data_broker": "zerodha",
     "trade_broker": "zerodha",
     "api_key": "REPLACE_ME",
