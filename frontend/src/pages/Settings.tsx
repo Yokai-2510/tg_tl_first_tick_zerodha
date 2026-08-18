@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
-import { ApiError, api } from '../lib/api'
-import { CREDENTIAL_GROUPS, SETTINGS } from '../lib/sections'
+import { useEffect, useMemo, useState } from 'react'
+import { ApiError, api, type ProfilesView } from '../lib/api'
+import { SETTINGS } from '../lib/sections'
 import { ACCENTS, GREETINGS, THEMES, usePrefs, type GreetMode } from '../lib/prefs'
 import { MONO, V, badge, cardTitleLg, ellip, seg, segTrack } from '../lib/style'
 import { useStore } from '../lib/store'
@@ -148,6 +148,56 @@ function Credentials() {
   const username = useStore((s) => s.username)
   const [checks, setChecks] = useState<Check[] | null>(null)
   const [busy, setBusy] = useState(false)
+  const [pv, setPv] = useState<ProfilesView | null>(null)
+  const [tab, setTab] = useState<string | null>(null)
+  const [acct, setAcct] = useState<Record<string, unknown> | null>(null)
+  const [cap, setCap] = useState<Record<string, number> | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+
+  const loadProfiles = async () => {
+    try {
+      const v = await api.brokerProfiles()
+      setPv(v)
+      setTab((t) => t ?? v.active ?? v.profiles[0]?.name ?? null)
+    } catch (e) {
+      setPv({ profiles: [], active: null,
+              error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+  useEffect(() => { void loadProfiles() }, [])
+
+  const open = pv?.profiles.find((p) => p.name === tab) ?? null
+
+  /** Test ONE profile. A non-active profile is proved without switching to it. */
+  const testProfile = async (name: string) => {
+    if (busy) return
+    setBusy(true); setChecks(null); setAcct(null); setCap(null); setNote(null)
+    try {
+      const r = await api.testProfile(name)
+      setChecks(r.checks.map((c) => ({
+        label: c.name.charAt(0).toUpperCase() + c.name.slice(1),
+        state: (c.ok ? 'pass' : 'fail') as Check['state'],
+        detail: c.ms != null ? `${c.detail} (${c.ms}ms)` : c.detail,
+      })))
+      // `profile` is the broker account dict; `profile_name` is the credential
+      // set that was tested. They are deliberately different keys.
+      setAcct(r.profile ?? null)
+      setCap(r.capital)
+    } catch (e) {
+      setChecks([{ label: 'Broker connection test', state: 'fail',
+                   detail: e instanceof Error ? e.message : String(e) }])
+    } finally { setBusy(false) }
+  }
+
+  const activate = async (name: string) => {
+    try {
+      const r = await api.activateProfile(name)
+      setNote(r.note)
+      await loadProfiles()
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   /**
    * Credentials are never returned by the API — credentials.json is gitignored and
@@ -285,30 +335,123 @@ function Credentials() {
         ) : null}
       </Card>
 
-      {CREDENTIAL_GROUPS.map((g) => (
-        <Card key={g.title} pad={false} style={{ overflow: 'hidden' }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            gap: 12, padding: '17px 22px', borderBottom: `1px solid ${V.border}`,
-          }}>
-            <div style={cardTitleLg}>{g.title}</div>
-            <div style={{ fontSize: 11, color: V.faint, fontFamily: MONO, ...ellip }}>{g.file}</div>
+      {/* Profiles. The active one is what the engine authenticates with; the
+          others can be proved without switching, so testing a second account
+          cannot disturb the session currently running. */}
+      <Card pad={false} style={{ overflow: 'hidden' }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 12, padding: '17px 22px', borderBottom: `1px solid ${V.border}`,
+        }}>
+          <div style={cardTitleLg}>Profiles</div>
+          <div style={{ fontSize: 11, color: V.faint, fontFamily: MONO, ...ellip }}>
+            {pv?.path ?? 'credentials.json'}
           </div>
-          {g.rows.map(([key, doc]) => (
-            <div key={key} style={{
-              display: 'grid', gridTemplateColumns: 'minmax(0,180px) minmax(0,1fr) 96px',
-              gap: 16, alignItems: 'center', padding: '13px 22px',
-              borderBottom: `1px solid ${V.border}`,
-            }}>
-              <div style={{ fontSize: 12, fontFamily: MONO, fontWeight: 500 }}>{key}</div>
-              <div style={{ fontSize: 11, color: V.muted, lineHeight: 1.55 }}>{doc}</div>
-              <div style={{ textAlign: 'right', fontSize: 11, color: V.faint, fontFamily: MONO }}>
-                ••••••••
-              </div>
+        </div>
+
+        {pv?.error ? (
+          <div style={{ padding: '16px 22px', fontSize: 12, color: V.neg }}>
+            {pv.error}
+          </div>
+        ) : !pv ? (
+          <div style={{ padding: '16px 22px', fontSize: 12, color: V.faint }}>Loading…</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: 3, padding: '12px 22px', flexWrap: 'wrap' }}>
+              {pv.profiles.map((p) => (
+                <button key={p.name} onClick={() => { setTab(p.name); setChecks(null) }}
+                  style={{ ...seg(tab === p.name), padding: '6px 14px' }}>
+                  {p.name}
+                  {p.active ? <span style={{ color: V.pos, marginLeft: 6 }}>●</span> : null}
+                  {!p.complete ? <span style={{ color: V.warn, marginLeft: 6 }}>!</span> : null}
+                </button>
+              ))}
             </div>
-          ))}
+
+            {open ? (
+              <>
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  gap: 12, padding: '4px 22px 16px',
+                }}>
+                  <div style={{ fontSize: 12, color: V.muted }}>
+                    broker <span style={{ fontFamily: MONO }}>{open.broker}</span>
+                    {open.active
+                      ? <span style={{ color: V.pos, marginLeft: 10 }}>active</span>
+                      : <span style={{ color: V.faint, marginLeft: 10 }}>not active</span>}
+                    {!open.complete
+                      ? <span style={{ color: V.warn, marginLeft: 10 }}>
+                          missing: {open.missing.join(', ')}
+                        </span>
+                      : null}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {!open.active ? (
+                      <Button onClick={() => void activate(open.name)}>Make active</Button>
+                    ) : null}
+                    <Button kind="primary" disabled={busy}
+                            onClick={() => void testProfile(open.name)}>
+                      {busy ? 'Testing…' : 'Test connection'}
+                    </Button>
+                  </div>
+                </div>
+
+                {open.fields.map((f) => (
+                  <div key={f.key} style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0,180px) minmax(0,1fr) auto',
+                    gap: 16, alignItems: 'center', padding: '13px 22px',
+                    borderTop: `1px solid ${V.border}`,
+                  }}>
+                    <div style={{ fontSize: 12, fontFamily: MONO, ...ellip }}>{f.key}</div>
+                    <div style={{ fontSize: 11, color: V.muted, fontFamily: MONO, ...ellip }}>
+                      {f.present ? f.masked : (f.required ? 'not set' : 'optional, not set')}
+                    </div>
+                    <span style={f.present ? badge(V.posbg, V.pos)
+                                           : badge(f.required ? V.negbg : V.chip,
+                                                   f.required ? V.neg : V.muted)}>
+                      {f.present ? 'SET' : (f.required ? 'MISSING' : '—')}
+                    </span>
+                  </div>
+                ))}
+              </>
+            ) : null}
+          </>
+        )}
+      </Card>
+
+      {note ? (
+        <div style={{
+          padding: '11px 15px', borderRadius: 12, background: V.warnbg,
+          border: `1px solid ${V.warn}44`, color: V.warn, fontSize: 12, lineHeight: 1.5,
+        }}>{note}</div>
+      ) : null}
+
+      {cap || acct ? (
+        <Card>
+          <CardHead title="Account" sub="Read live from the broker by the last test." />
+          <div style={{ marginTop: 14, display: 'grid', gap: 10 }}>
+            {acct ? Object.entries(acct)
+              .filter(([, v]) => v !== null && v !== undefined && typeof v !== 'object')
+              .slice(0, 6)
+              .map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                  <span style={{ fontSize: 12, color: V.muted, fontFamily: MONO }}>{k}</span>
+                  <span style={{ fontSize: 12, ...ellip }}>{String(v)}</span>
+                </div>
+              )) : null}
+            {cap ? (
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                <span style={{ fontSize: 12, color: V.muted, fontFamily: MONO }}>available</span>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>
+                  ₹{Number(cap.available ?? 0).toLocaleString('en-IN',
+                    { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+            ) : null}
+          </div>
         </Card>
-      ))}
+      ) : null}
 
       <Card>
         <CardHead title="Changing a secret"

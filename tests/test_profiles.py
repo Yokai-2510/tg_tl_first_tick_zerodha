@@ -128,3 +128,36 @@ def test_no_secret_leaks_into_the_doc_field(tmp_path):
     set_active_profile(DEFAULT_PROFILE, p)
     raw = json.loads(p.read_text(encoding="utf-8"))
     assert Z["api_secret"] not in str(raw.get("_doc", ""))
+
+
+# ------------------------------------------- the /broker/profiles endpoints
+
+def test_the_test_route_does_not_clobber_the_account_with_the_profile_name():
+    """run_test returns the broker account under `profile`. Stamping the credential
+    set's name onto the same key silently replaced the account details with a
+    string, so the console had nothing to show."""
+    from backend.api import broker_check
+
+    class FakeKite:
+        def profile(self):
+            return {"user_name": "Vijay", "email": "v@example.com"}
+        def margins(self):
+            return {"equity": {"available": {"live_balance": 1000.0}}}
+        def instruments(self, exch):
+            return [{"tradingsymbol": "X"}]
+
+    import backend.brokers.kite.auth as kauth
+    real = kauth.login
+    kauth.login = lambda *a, **k: (
+        FakeKite(), type("S", (), {"user_name": "Vijay", "user_id": "AB1234"})())
+    try:
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            res = broker_check.run_test(creds=Z, data_dir=td)
+    finally:
+        kauth.login = real
+
+    assert isinstance(res["profile"], dict), "the account must stay a dict"
+    assert res["profile"]["user_name"] == "Vijay"
+    res["profile_name"] = "live"          # what the route adds
+    assert isinstance(res["profile"], dict), "adding the name must not overwrite it"

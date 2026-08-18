@@ -409,7 +409,14 @@ class Application:
             "engine": self.feed.stats(),
             "recorder": self.recorder.stats(),
             "positions": self.book.summary(),
+            # Both views, always, so the console can show them side by side
+            # rather than only whichever mode happens to be active. `capital`
+            # stays the ACTIVE one so nothing that already reads it changes.
             "capital": self.capital or self._paper_capital(),
+            "capital_paper": self._paper_capital(),
+            "capital_live": (self.capital
+                             if self.capital and not self.capital.get("simulated")
+                             else None),
             "rate_limits": self.limiter.stats(),
             "ws_clients": self.hub.client_count,
             "server_time": now_ist().isoformat(),

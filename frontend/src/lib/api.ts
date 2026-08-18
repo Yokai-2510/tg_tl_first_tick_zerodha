@@ -155,6 +155,18 @@ export interface BrokerTestResult {
 export interface CredField {
   key: string; required: boolean; present: boolean; masked: string; length: number
 }
+export interface ProfileView {
+  name: string; active: boolean; broker: string
+  fields: CredField[]; complete: boolean; missing: string[]
+}
+export interface ProfilesView {
+  profiles: ProfileView[]
+  active: string | null
+  path?: string
+  token_cache?: { exists: boolean; fresh: boolean; issued_at: string | null; detail: string } | null
+  error?: string
+}
+
 export interface CredentialsView {
   path?: string; data_broker?: string; trade_broker?: string
   brokers: { broker: string; fields: CredField[]; complete: boolean; missing: string[] }[]
@@ -221,6 +233,9 @@ export interface Status {
   feed: FeedStats; engine: EngineStats; recorder: RecorderStats
   positions: PositionsSummary
   capital: Capital
+  /** Both views, always present, so the console can compare them. */
+  capital_paper?: Capital | null
+  capital_live?: Capital | null
   rate_limits: Record<string, Bucket>
   ws_clients: number; server_time: string
 }
@@ -315,6 +330,16 @@ export const api = {
   killSwitch: () => post<{ halted: boolean; exiting: number }>('/control/kill_switch', { confirm: 'KILL' }),
   reconcile: () => post<Record<string, string[]>>('/control/reconcile'),
   /** Masked view of the credentials the server holds. No secret is ever returned. */
+  /** Every credential profile, masked, and which one is active. */
+  brokerProfiles: () => get<ProfilesView>('/broker/profiles'),
+  /** Switch the active profile. Applies at the next broker connect. */
+  activateProfile: (name: string) =>
+    post<{ active: string; note: string }>(
+      `/broker/profiles/${encodeURIComponent(name)}/activate`),
+  /** Authenticate ONE profile without switching to it. */
+  testProfile: (name: string) =>
+    post<BrokerTestResult & { profile_name: string }>(
+      `/broker/profiles/${encodeURIComponent(name)}/test`),
   brokerCredentials: () => get<CredentialsView>('/broker/credentials'),
   /** Authenticates for real and exercises profile, margins and the master. */
   brokerTest: () => post<BrokerTestResult>('/broker/test'),

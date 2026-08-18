@@ -403,7 +403,9 @@ def create_app(app_state) -> FastAPI:
             run_test, creds=creds, data_dir=data_dir,
             broker=str(creds.get("broker") or cfg.broker.data_broker),
             limiter=app_state.limiter)
-        result["profile"] = name
+        # run_test already returns the broker account under "profile"; naming the
+        # credential set the same thing would overwrite the account details.
+        result["profile_name"] = name
         return ok(result)
 
     @api.post(f"{API_PREFIX}/broker/test", dependencies=[Depends(auth)])

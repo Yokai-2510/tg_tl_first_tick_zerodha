@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { PHASE_ORDER, type Phase } from '../lib/api'
 import { DASH, duration, int, micros, millis, money, pct, timeFromUs } from '../lib/format'
 import { PHASE_SCHEDULE } from '../lib/sections'
-import { MONO, V, cut, ellip, pctWidth, tone } from '../lib/style'
+import { MONO, V, cut, ellip, pctWidth, seg, segTrack, tone } from '../lib/style'
 import { useStore } from '../lib/store'
 import { Bar, Card, CardHead, Kpi, Pill, Sparkline, StackedBar, StatHead } from '../components/ui'
 
@@ -231,12 +231,37 @@ function SplitCard({ realised, unrealised, realisedSeries, unrealisedSeries, ope
 }
 
 function CapitalCard() {
-  const cap = useStore((s) => s.status?.capital)
+  const active = useStore((s) => s.status?.capital)
+  const paper = useStore((s) => s.status?.capital_paper)
+  const live = useStore((s) => s.status?.capital_live)
+  const mode = useStore((s) => s.status?.mode)
+
+  // Default to whichever the engine is actually trading on, but let the operator
+  // look at the other without changing anything -- seeing real broker margin
+  // while running paper is exactly when you want to compare the two.
+  const [view, setView] = useState<'live' | 'paper'>(mode === 'live' ? 'live' : 'paper')
+  const cap = view === 'live' ? (live ?? (active?.simulated ? null : active)) : (paper ?? active)
+
+  const toggle = (paper || live) ? (
+    <div style={{ ...segTrack, padding: 2 }}>
+      {(['live', 'paper'] as const).map((m) => (
+        <button key={m} onClick={() => setView(m)}
+          style={{ ...seg(view === m), padding: '3px 9px', fontSize: 10 }}>
+          {m}
+        </button>
+      ))}
+    </div>
+  ) : null
+
   if (!cap) {
     return (
       <Card pad="20px 22px">
-        <StatHead title="Capital" />
-        <div style={{ fontSize: 12, color: V.faint, marginTop: 14 }}>Not reported by the backend.</div>
+        <StatHead title="Capital" right={toggle} />
+        <div style={{ fontSize: 12, color: V.faint, marginTop: 14, lineHeight: 1.6 }}>
+          {view === 'live'
+            ? 'No broker margin yet — it is read at phase 1, or by Settings → Credentials → Test connection.'
+            : 'Not reported by the backend.'}
+        </div>
       </Card>
     )
   }
@@ -248,7 +273,11 @@ function CapitalCard() {
   return (
     <Card pad="20px 22px" style={{ display: 'flex', flexDirection: 'column' }}>
       <StatHead title="Capital" right={
-        <Pill>{cap.simulated ? 'simulated' : `${pct(cap.deployed_pct, { sign: false })} deployed`}</Pill>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Pill>{cap.simulated ? 'simulated'
+                 : `${pct(cap.deployed_pct, { sign: false })} deployed`}</Pill>
+          {toggle}
+        </div>
       } />
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, marginTop: 12 }}>
         <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-.032em', whiteSpace: 'nowrap' }}>
