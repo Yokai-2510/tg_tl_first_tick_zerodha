@@ -1,358 +1,293 @@
 import { useMemo, useState } from 'react'
-import { api, type ArmedRow, type MarketRow, type RankRow } from '../lib/api'
+import type { RankRow } from '../lib/api'
+import { DASH, int, pct, price } from '../lib/format'
+import { MONO, V, badge, ellip, pctWidth, tone } from '../lib/style'
 import { useStore } from '../lib/store'
-import { int, micros, pct, price, signClass, DASH } from '../lib/format'
-import { Card, Field, Pill, Section, Stat, Table, Tabs } from '../components/ui'
-import { Segmented, SortTh, useSort, type Col } from '../components/sortable'
+import { Card, CardHead, ChipRow, Empty, Scroller, Segmented, StatHead, Thead, Trow } from '../components/ui'
 
-type Tab = 'armed' | 'ranking' | 'ticks'
+type Tab = 'summary' | 'movers'
+type Side = 'all' | 'gainers' | 'losers'
+type SortKey = 'change' | 'ltp' | 'volume' | 'rank'
 
 export default function LiveData() {
+  const [tab, setTab] = useState<Tab>('summary')
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <Segmented<Tab> value={tab} onChange={setTab} options={[
+        { key: 'summary', label: 'Summary' },
+        { key: 'movers', label: 'Gainers & losers' },
+      ]} />
+      {tab === 'summary' ? <Summary /> : <Movers />}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ summary */
+
+function Summary() {
   const universe = useStore((s) => s.universe)
+  const ranking = useStore((s) => s.ranking)
   const status = useStore((s) => s.status)
-  const cfg = useStore((s) => s.cfg)
-  const market = useStore((s) => s.market)
-  const [tab, setTab] = useState<Tab>('armed')
 
-  const cap = cfg?.config?.instruments?.subscription_soft_cap ?? 2400
-  const armed = universe?.armed ?? []
-  const fired = armed.filter((a) => a.fired).length
+  const modes = status?.feed.modes ?? {}
+  const modeSplit = Object.entries(modes)
+    .map(([k, v]) => `${int(v)} ${k}`)
+    .join(' · ')
 
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
-        <Stat label="Subscribed" value={int(universe?.subscribed ?? 0)} sub={`cap ${int(cap)}`} />
-        <Stat label="Armed" value={int(armed.length)} sub={`${fired} fired`} />
-        <Stat label="Tradeable" value={int(universe?.tradeable.length ?? 0)}
-              sub="may fire entries" hint="Top-N ranked names" />
-        <Stat label="Buffer" value={int(universe?.buffer.length ?? 0)}
-              sub="subscribed, not traded"
-              hint="Extra ranks kept live in case the ranking shifts" />
-        <Stat label="Ticks tracked" value={int(Object.keys(market).length)}
-              sub={`${int(status?.engine.ticks_seen ?? 0)} received`} />
-      </div>
-
-      {universe && (universe.tradeable.length > 0 || universe.buffer.length > 0) && (
-        <Card label="Selection">
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {universe.tradeable.map((s) => <Pill key={s} tone="text-pos border-pos/40">{s}</Pill>)}
-            {universe.buffer.map((s) => <Pill key={s} tone="text-muted border-line">{s}</Pill>)}
-          </div>
-          <div className="text-[11px] text-muted">
-            Green = tradeable (may fire an entry). Grey = buffer (subscribed only, never traded).
-          </div>
-        </Card>
-      )}
-
-      <Section title="Instruments">
-        <Tabs value={tab} onChange={setTab} tabs={[
-          { id: 'armed', label: 'Armed', count: armed.length },
-          { id: 'ranking', label: 'Ranking', count: useStore.getState().ranking.length },
-          { id: 'ticks', label: 'All ticks', count: Object.keys(market).length },
-        ]} />
-      </Section>
-
-      {tab === 'armed' && <ArmedTable phase={status?.phase ?? ''} />}
-      {tab === 'ranking' && <RankingTable />}
-      {tab === 'ticks' && <TicksTable />}
-
-      <ManualPanel />
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------- armed
-
-type ArmedLive = ArmedRow & { diff: number; bid: number; ask: number; volume: number; oi: number }
-
-function ArmedTable({ phase }: { phase: string }) {
-  const armed = useStore((s) => s.universe?.armed ?? [])
-  const market = useStore((s) => s.market)
-  const [q, setQ] = useState('')
-  const [side, setSide] = useState<'all' | 'ce' | 'pe' | 'fired'>('all')
-
-  const rows: ArmedLive[] = useMemo(() => {
-    const needle = q.trim().toUpperCase()
-    return armed
-      .map((a) => {
-        const m: MarketRow | undefined = market[String(a.token)]
-        const ltp = m?.ltp ?? a.ltp
-        return {
-          ...a, ltp, diff: ltp - a.ref_price,
-          bid: m?.bid ?? 0, ask: m?.ask ?? 0,
-          volume: m?.volume ?? 0, oi: m?.oi ?? 0,
-        }
-      })
-      .filter((a) => {
-        if (needle && !a.symbol.includes(needle) && !a.underlying.includes(needle)) return false
-        if (side === 'ce') return a.symbol.endsWith('CE')
-        if (side === 'pe') return a.symbol.endsWith('PE')
-        if (side === 'fired') return a.fired
-        return true
-      })
-  }, [armed, market, q, side])
-
-  const cols: Col<ArmedLive>[] = [
-    { id: 'symbol', label: 'Symbol', get: (r) => r.symbol, num: false },
-    { id: 'underlying', label: 'Under', get: (r) => r.underlying, num: false },
-    { id: 'ref', label: 'Reference', get: (r) => r.ref_price, num: true,
-      hint: 'Previous close — options do not trade in the pre-open' },
-    { id: 'ltp', label: 'LTP', get: (r) => r.ltp, num: true },
-    { id: 'diff', label: 'Diff', get: (r) => r.diff, num: true,
-      hint: 'LTP minus reference. The first positive diff fires the entry.' },
-    { id: 'bid', label: 'Bid', get: (r) => r.bid, num: true },
-    { id: 'ask', label: 'Ask', get: (r) => r.ask, num: true },
-    { id: 'volume', label: 'Volume', get: (r) => r.volume, num: true,
-      hint: 'Contracts traded today on this strike' },
-    { id: 'oi', label: 'OI', get: (r) => r.oi, num: true,
-      hint: 'Open interest on this strike — favours liquid chains' },
-    { id: 'lots', label: 'Lots', get: (r) => r.lots, num: true },
+  const stats = [
+    {
+      label: 'Subscribed',
+      value: int(universe?.subscribed ?? status?.feed.subscribed ?? 0),
+      sub: modeSplit || 'no mode breakdown',
+    },
+    {
+      label: 'Tradeable',
+      value: int(universe?.tradeable.length ?? 0),
+      sub: 'may fire entries',
+    },
+    {
+      label: 'Buffer',
+      value: int(universe?.buffer.length ?? 0),
+      sub: 'subscribed, never traded',
+    },
+    {
+      label: 'Armed',
+      value: int(universe?.armed.length ?? 0),
+      sub: universe?.armed.length
+        ? `${int(universe.armed.filter((a) => a.fired).length)} fired`
+        : 'nothing armed yet',
+    },
   ]
-  const { sorted, by, dir, toggle } = useSort(rows, cols, 'diff', 'desc')
-
-  const empty = ['BOOT', 'IDLE', 'PHASE_1', 'FEED_LIVE', 'PREOPEN', 'SETTLEMENT'].includes(phase)
-    ? 'Nothing armed yet — option chains subscribe after the settlement snapshot.'
-    : 'No armed instruments match this filter.'
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2 items-center">
-        <input className="inp max-w-xs" placeholder="Filter symbol or underlying"
-               value={q} onChange={(e) => setQ(e.target.value)} />
-        <Segmented value={side} onChange={setSide} options={[
-          { id: 'all', label: 'All' }, { id: 'ce', label: 'CE' },
-          { id: 'pe', label: 'PE' }, { id: 'fired', label: 'Fired' },
-        ]} />
-        <span className="text-micro text-muted ml-auto">{sorted.length} of {armed.length}</span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 18 }}>
+        {stats.map((k) => (
+          <Card key={k.label} pad="20px 22px">
+            <StatHead title={k.label} />
+            <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-.032em', marginTop: 13 }}>{k.value}</div>
+            <div style={{ fontSize: 12, color: V.muted, marginTop: 7, ...ellip }}>{k.sub}</div>
+          </Card>
+        ))}
       </div>
 
-      <Table colSpan={cols.length} empty={empty}
-        head={cols.map((c) => (
-          <SortTh key={c.id} col={c} by={by} dir={dir} onSort={toggle} />
-        ))}>
-        {sorted.map((a) => (
-          <tr key={a.token} className={a.fired ? 'bg-accent/5' : 'hover:bg-surface/60'}>
-            <td className="td font-medium">
-              {a.symbol}
-              {a.fired && <span className="ml-2 text-[10px] text-accent uppercase">fired</span>}
-            </td>
-            <td className="td text-muted">{a.underlying}</td>
-            <td className="td num">{price(a.ref_price)}</td>
-            <td className="td num">{price(a.ltp)}</td>
-            <td className={`td num font-medium ${signClass(a.diff)}`}>{price(a.diff)}</td>
-            <td className="td num">{price(a.bid, { zeroIsDash: true })}</td>
-            <td className="td num">{price(a.ask, { zeroIsDash: true })}</td>
-            <td className="td num mono text-[11px]">{a.volume ? int(a.volume) : DASH}</td>
-            <td className="td num mono text-[11px]">{a.oi ? int(a.oi) : DASH}</td>
-            <td className="td num">{a.lots}</td>
-          </tr>
-        ))}
-      </Table>
-      <div className="text-[11px] text-muted">
-        Diff = LTP − reference. The reference for an option is its previous close, because
-        options do not trade in the pre-open. Bid/ask and volume show — when the book is
-        empty (market closed).
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.15fr)',
+        gap: 18, alignItems: 'start',
+      }}>
+        <Breadth rows={ranking} />
+        <Extremes rows={ranking} />
       </div>
     </div>
   )
 }
 
-// ---------------------------------------------------------------- ranking
+const BUCKETS: [string, (r: RankRow) => boolean, string][] = [
+  ['above +2%', (r) => r.change_pct > 2, V.pos],
+  ['+1 to +2%', (r) => r.change_pct > 1 && r.change_pct <= 2, V.pos],
+  ['0 to +1%', (r) => r.change_pct > 0 && r.change_pct <= 1, V.pos],
+  ['−1 to 0%', (r) => r.change_pct <= 0 && r.change_pct > -1, V.neg],
+  ['−2 to −1%', (r) => r.change_pct <= -1 && r.change_pct > -2, V.neg],
+  ['below −2%', (r) => r.change_pct <= -2, V.neg],
+]
 
-function RankingTable() {
+function Breadth({ rows }: { rows: RankRow[] }) {
+  const counts = BUCKETS.map(([, test]) => rows.filter(test).length)
+  const top = Math.max(...counts, 1)
+  const up = rows.filter((r) => r.change_pct > 0).length
+
+  return (
+    <Card>
+      <CardHead
+        title="Breadth"
+        sub="Ranked constituents by move against the previous close"
+        right={<div style={{ fontSize: 12, fontFamily: MONO, color: V.muted, whiteSpace: 'nowrap' }}>
+          {rows.length ? `${up} up · ${rows.length - up} down` : DASH}
+        </div>}
+      />
+      <div style={{ marginTop: 18 }}>
+        {BUCKETS.map(([label, , color], i) => (
+          <div key={label} style={{
+            display: 'grid', gridTemplateColumns: '78px minmax(0,1fr) 34px',
+            gap: 12, alignItems: 'center', padding: '6px 0',
+          }}>
+            <div style={{ fontSize: 11, fontFamily: MONO, color: V.muted, textAlign: 'right' }}>{label}</div>
+            <div style={{ height: 9, borderRadius: 5, background: V.chip, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', width: pctWidth(counts[i], top),
+                background: counts[i] ? color : V.border2, borderRadius: 5,
+              }} />
+            </div>
+            <div style={{
+              fontSize: 12, fontFamily: MONO, textAlign: 'right',
+              color: counts[i] ? V.text : V.faint,
+            }}>{counts[i]}</div>
+          </div>
+        ))}
+      </div>
+      {!rows.length ? (
+        <div style={{ fontSize: 12, color: V.faint, marginTop: 10, lineHeight: 1.6 }}>
+          The ranking is computed at the settlement snapshot. Nothing to plot before then.
+        </div>
+      ) : null}
+    </Card>
+  )
+}
+
+function Extremes({ rows }: { rows: RankRow[] }) {
+  const sorted = [...rows].sort((a, b) => b.change_pct - a.change_pct)
+  const groups = [
+    { title: 'TOP GAINERS', color: V.pos, rows: sorted.slice(0, 5) },
+    { title: 'TOP LOSERS', color: V.neg, rows: sorted.slice(-5).reverse() },
+  ]
+
+  return (
+    <Card>
+      <CardHead title="Extremes" sub="The five names at each end of the ranking" />
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))',
+        gap: 22, marginTop: 16,
+      }}>
+        {groups.map((g) => (
+          <div key={g.title} style={{ minWidth: 0 }}>
+            <div style={{
+              fontSize: 11, fontWeight: 700, letterSpacing: '.07em',
+              color: g.color, marginBottom: 9,
+            }}>{g.title}</div>
+            {g.rows.length ? g.rows.map((r) => (
+              <div key={r.symbol} style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0',
+                borderTop: `1px solid ${V.border}`, fontSize: 12, minWidth: 0,
+              }}>
+                <span style={{ fontWeight: 500, flex: 1, ...ellip }}>{r.symbol}</span>
+                <span style={{ fontFamily: MONO, color: V.muted, whiteSpace: 'nowrap' }}>{price(r.ltp)}</span>
+                <span style={{
+                  fontFamily: MONO, color: tone(r.change_pct), whiteSpace: 'nowrap',
+                  width: 62, textAlign: 'right',
+                }}>{pct(r.change_pct)}</span>
+              </div>
+            )) : (
+              <div style={{ fontSize: 12, color: V.faint, padding: '6px 0' }}>Not ranked yet.</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+/* ------------------------------------------------------------------ movers */
+
+const SORTS: { key: SortKey; label: string; get: (r: RankRow) => number }[] = [
+  { key: 'rank', label: 'Rank', get: (r) => -r.rank },
+  { key: 'change', label: 'Change %', get: (r) => r.change_pct },
+  { key: 'ltp', label: 'LTP', get: (r) => r.ltp },
+  { key: 'volume', label: 'Volume', get: (r) => r.volume ?? 0 },
+]
+
+const COLS = '44px minmax(120px,1fr) 88px 88px 84px 104px 128px 84px'
+
+function Movers() {
   const ranking = useStore((s) => s.ranking)
   const universe = useStore((s) => s.universe)
-  const buffer = new Set(universe?.buffer ?? [])
-  const [side, setSide] = useState<'all' | 'gainers' | 'losers' | 'selected'>('all')
+  const [side, setSide] = useState<Side>('all')
+  const [sort, setSort] = useState<SortKey>('rank')
+  const [dir, setDir] = useState<'desc' | 'asc'>('desc')
 
-  const rows = useMemo(() => ranking.filter((r) => {
-    if (side === 'gainers') return r.change_pct > 0
-    if (side === 'losers') return r.change_pct < 0
-    if (side === 'selected') return r.selected || buffer.has(r.symbol)
-    return true
-  }), [ranking, side, buffer])
+  const tradeable = useMemo(() => new Set(universe?.tradeable ?? []), [universe])
+  const buffer = useMemo(() => new Set(universe?.buffer ?? []), [universe])
 
-  const cols: Col<RankRow>[] = [
-    { id: 'rank', label: '#', get: (r) => r.rank, num: true },
-    { id: 'symbol', label: 'Symbol', get: (r) => r.symbol, num: false },
-    { id: 'prev', label: 'Prev close', get: (r) => r.prev_close, num: true },
-    { id: 'ltp', label: 'Settlement', get: (r) => r.ltp, num: true,
-      hint: 'Price at the 09:09 settlement snapshot' },
-    { id: 'chg', label: 'Change %', get: (r) => r.change_pct, num: true },
-    { id: 'volume', label: 'Volume', get: (r) => r.volume ?? 0, num: true,
-      hint: 'Pre-open auction volume — filters out names that gapped on nothing' },
-    { id: 'high', label: 'High', get: (r) => r.high ?? 0, num: true },
-    { id: 'low', label: 'Low', get: (r) => r.low ?? 0, num: true },
-    { id: 'sel', label: 'Selection' },
-  ]
-  const { sorted, by, dir, toggle } = useSort(rows, cols, 'chg', 'desc')
+  const rows = useMemo(() => {
+    let list = ranking
+    if (side === 'gainers') list = list.filter((r) => r.change_pct > 0)
+    if (side === 'losers') list = list.filter((r) => r.change_pct < 0)
+    const get = (SORTS.find((s) => s.key === sort) ?? SORTS[0]).get
+    return [...list].sort((a, b) => (dir === 'desc' ? get(b) - get(a) : get(a) - get(b)))
+  }, [ranking, side, sort, dir])
+
+  const active = SORTS.find((s) => s.key === sort) ?? SORTS[0]
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2 items-center">
-        <Segmented value={side} onChange={setSide} options={[
-          { id: 'all', label: 'All 50' }, { id: 'gainers', label: 'Gainers' },
-          { id: 'losers', label: 'Losers' }, { id: 'selected', label: 'Selected' },
-        ]} />
-        <span className="text-micro text-muted ml-auto">{sorted.length} symbols</span>
+    <Card pad={false} style={{ overflow: 'hidden' }}>
+      <div style={{
+        padding: '18px 20px', borderBottom: `1px solid ${V.border}`,
+        display: 'flex', flexDirection: 'column', gap: 14,
+      }}>
+        <CardHead
+          title="Gainers and losers"
+          sub={`Sorted by ${active.label.toLowerCase()}, ${dir === 'desc' ? 'high to low' : 'low to high'}. Tradeable names may fire entries; buffer names are subscribed only.`}
+          right={<div style={{ fontSize: 11, color: V.faint, whiteSpace: 'nowrap' }}>
+            {rows.length} of {ranking.length} ranked
+          </div>}
+        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <Segmented<Side> value={side} onChange={setSide} style={{ padding: 3 }} options={[
+            { key: 'all', label: 'All' },
+            { key: 'gainers', label: 'Gainers' },
+            { key: 'losers', label: 'Losers' },
+          ]} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: V.faint }}>Sort</span>
+            <ChipRow<SortKey>
+              value={sort}
+              onChange={(k) => {
+                if (k === sort) setDir(dir === 'desc' ? 'asc' : 'desc')
+                else { setSort(k); setDir('desc') }
+              }}
+              options={SORTS.map((s) => ({
+                key: s.key,
+                label: s.label,
+                count: s.key === sort ? (dir === 'desc' ? '↓' : '↑') : undefined,
+              }))}
+            />
+          </div>
+        </div>
       </div>
-      <Table colSpan={cols.length}
-        empty="Ranking is computed at the settlement snapshot (09:09)."
-        head={cols.map((c) => (
-          <SortTh key={c.id} col={c} by={by} dir={dir} onSort={toggle} />
-        ))}>
-        {sorted.map((r) => (
-          <tr key={r.symbol} className={r.selected ? 'bg-pos/5' : 'hover:bg-surface/60'}>
-            <td className="td num text-muted">{r.rank}</td>
-            <td className="td font-medium">{r.symbol}</td>
-            <td className="td num">{price(r.prev_close)}</td>
-            <td className="td num">{price(r.ltp)}</td>
-            <td className={`td num font-medium ${signClass(r.change_pct)}`}>{pct(r.change_pct)}</td>
-            <td className="td num mono text-[11px]">{r.volume ? int(r.volume) : DASH}</td>
-            <td className="td num">{price(r.high, { zeroIsDash: true })}</td>
-            <td className="td num">{price(r.low, { zeroIsDash: true })}</td>
-            <td className="td">
-              {r.selected ? <Pill tone="text-pos border-pos/40">Tradeable</Pill>
-                : buffer.has(r.symbol) ? <Pill tone="text-muted border-line">Buffer</Pill>
-                : <span className="text-muted">{DASH}</span>}
-            </td>
-          </tr>
-        ))}
-      </Table>
-    </div>
-  )
-}
 
-// ---------------------------------------------------------------- all ticks
-
-type TickRow = MarketRow & { token: string }
-
-function TicksTable() {
-  const market = useStore((s) => s.market)
-  const [q, setQ] = useState('')
-  const [kind, setKind] = useState<'all' | 'options' | 'equity'>('all')
-
-  const rows: TickRow[] = useMemo(() => {
-    const needle = q.trim().toUpperCase()
-    return Object.entries(market)
-      .map(([token, r]) => ({ token, ...r }))
-      .filter((r) => {
-        const sym = r.sym ?? ''
-        if (needle && !sym.includes(needle)) return false
-        // A suffix test is WRONG here: BAJFINANCE ends in "CE". An option's
-        // tradingsymbol always differs from its underlying; an equity's does not.
-        const isOpt = !!r.underlying && sym !== r.underlying
-        if (kind === 'options') return isOpt
-        if (kind === 'equity') return !isOpt
-        return true
-      })
-  }, [market, q, kind])
-
-  const cols: Col<TickRow>[] = [
-    { id: 'sym', label: 'Symbol', get: (r) => r.sym ?? '', num: false },
-    { id: 'token', label: 'Token', get: (r) => Number(r.token), num: true },
-    { id: 'ltp', label: 'LTP', get: (r) => r.ltp, num: true },
-    { id: 'bid', label: 'Bid', get: (r) => r.bid, num: true },
-    { id: 'ask', label: 'Ask', get: (r) => r.ask, num: true },
-    { id: 'spread', label: 'Spread', get: (r) => (r.ask > 0 && r.bid > 0 ? r.ask - r.bid : -1), num: true,
-      hint: 'Ask minus bid. Wide spreads fill worse.' },
-    { id: 'volume', label: 'Volume', get: (r) => r.volume ?? 0, num: true },
-    { id: 'oi', label: 'OI', get: (r) => r.oi ?? 0, num: true },
-    { id: 'lag', label: 'Feed lag', get: (r) => r.feed_lag_us ?? 0, num: true,
-      hint: "The exchange's dissemination delay, not ours" },
-  ]
-  const { sorted, by, dir, toggle } = useSort(rows, cols, 'volume', 'desc')
-  const shown = sorted.slice(0, 600)
-
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2 items-center">
-        <input className="inp max-w-xs" placeholder="Filter symbol"
-               value={q} onChange={(e) => setQ(e.target.value)} />
-        <Segmented value={kind} onChange={setKind} options={[
-          { id: 'all', label: 'All' }, { id: 'options', label: 'Options' },
-          { id: 'equity', label: 'Equity & index' },
-        ]} />
-        <span className="text-micro text-muted ml-auto">
-          {shown.length < sorted.length ? `${shown.length} of ${sorted.length}` : `${sorted.length}`}
-        </span>
-      </div>
-      <Table colSpan={cols.length} empty="No ticks received yet."
-        head={cols.map((c) => (
-          <SortTh key={c.id} col={c} by={by} dir={dir} onSort={toggle} />
-        ))}>
-        {shown.map((r) => {
-          const spread = r.ask > 0 && r.bid > 0 ? r.ask - r.bid : null
+      <Scroller min={900} maxHeight={600}>
+        <Thead cols={COLS}>
+          <div>#</div>
+          <div>Symbol</div>
+          <div style={{ textAlign: 'right' }}>Prev close</div>
+          <div style={{ textAlign: 'right' }}>LTP</div>
+          <div style={{ textAlign: 'right' }}>Change</div>
+          <div style={{ textAlign: 'right' }}>Volume</div>
+          <div style={{ textAlign: 'right' }}>Day high / low</div>
+          <div style={{ textAlign: 'right' }}>Set</div>
+        </Thead>
+        {rows.map((r) => {
+          const isTradeable = tradeable.has(r.symbol)
+          const isBuffer = r.buffer ?? buffer.has(r.symbol)
+          const selected = r.selected || isTradeable || isBuffer
           return (
-            <tr key={r.token} className="hover:bg-surface/60">
-              <td className="td font-medium">{r.sym ?? DASH}</td>
-              <td className="td num mono text-[11px] text-muted">{r.token}</td>
-              <td className="td num">{price(r.ltp)}</td>
-              <td className="td num">{price(r.bid, { zeroIsDash: true })}</td>
-              <td className="td num">{price(r.ask, { zeroIsDash: true })}</td>
-              <td className="td num">{spread === null ? DASH : price(spread)}</td>
-              <td className="td num mono text-[11px]">{r.volume ? int(r.volume) : DASH}</td>
-              <td className="td num mono text-[11px]">{r.oi ? int(r.oi) : DASH}</td>
-              <td className="td num text-muted mono text-[11px]">{micros(r.feed_lag_us)}</td>
-            </tr>
+            <Trow key={r.symbol} cols={COLS} minHeight={38}
+              background={selected ? V.sunken : 'transparent'}>
+              <div style={{ color: V.faint, fontFamily: MONO }}>{r.rank}</div>
+              <div style={{ fontWeight: selected ? 600 : 400, ...ellip }}>{r.symbol}</div>
+              <div style={{ textAlign: 'right', color: V.muted }}>{price(r.prev_close)}</div>
+              <div style={{ textAlign: 'right' }}>{price(r.ltp, { zeroIsDash: true })}</div>
+              <div style={{ textAlign: 'right', color: tone(r.change_pct), fontWeight: 500 }}>
+                {pct(r.change_pct)}
+              </div>
+              <div style={{ textAlign: 'right', color: V.muted, fontFamily: MONO, fontSize: 11 }}>
+                {r.volume === undefined ? DASH : int(r.volume)}
+              </div>
+              <div style={{ textAlign: 'right', color: V.muted, fontFamily: MONO, fontSize: 11 }}>
+                {r.high || r.low ? `${price(r.high)} / ${price(r.low)}` : DASH}
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                {isTradeable ? <span style={badge(V.posbg, V.pos)}>TRADE</span>
+                  : isBuffer ? <span style={badge(V.chip, V.muted)}>BUFFER</span>
+                    : <span style={{ color: V.faint, fontSize: 10 }}>{DASH}</span>}
+              </div>
+            </Trow>
           )
         })}
-      </Table>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------- manual
-
-function ManualPanel() {
-  const cfg = useStore((s) => s.cfg)
-  const refresh = useStore((s) => s.refresh)
-  const setError = useStore((s) => s.setError)
-  const [sym, setSym] = useState('')
-  const [busy, setBusy] = useState(false)
-  const cutoff = cfg?.config?.schedule?.manual_cutoff ?? '09:14:00'
-  const manual: any[] = cfg?.config?.universe?.manual_instruments ?? []
-
-  const add = async () => {
-    if (!sym.trim()) return
-    setBusy(true)
-    try { await api.manualAdd(sym.trim().toUpperCase()); setSym(''); await refresh('config'); setError(null) }
-    catch (e: any) { setError(e?.message ?? 'Add failed') }
-    finally { setBusy(false) }
-  }
-  const remove = async (s: string) => {
-    setBusy(true)
-    try { await api.manualRemove(s); await refresh('config'); setError(null) }
-    catch (e: any) { setError(e?.message ?? 'Remove failed') }
-    finally { setBusy(false) }
-  }
-
-  return (
-    <Card label="Manual instruments"
-          hint={`Accepted until ${cutoff}; the instrument set freezes after that.`}>
-      <div className="flex gap-2 items-end mb-3">
-        <div className="w-56">
-          <Field label="Underlying symbol">
-            <input className="inp" placeholder="e.g. INDIGO" value={sym}
-                   onChange={(e) => setSym(e.target.value)}
-                   onKeyDown={(e) => { if (e.key === 'Enter') void add() }} />
-          </Field>
-        </div>
-        <button className="btn btn-primary" disabled={busy || !sym.trim()} onClick={add}>Add</button>
-      </div>
-      {manual.length === 0
-        ? <div className="text-micro text-muted">
-            None. Manual additions are accepted until {cutoff}, after which the backend
-            refuses them and the instrument set is frozen.
-          </div>
-        : <div className="flex flex-wrap gap-1.5">
-            {manual.map((m, i) => (
-              <button key={i} className="btn h-6 px-2" disabled={busy}
-                      onClick={() => remove(String(m.symbol ?? m))}>
-                {String(m.symbol ?? m)} ✕
-              </button>
-            ))}
-          </div>}
+        {!rows.length ? (
+          <Empty title="Nothing ranked yet."
+            why="The ranking is computed from the pre-open snapshot at the settlement time." />
+        ) : null}
+      </Scroller>
     </Card>
   )
 }

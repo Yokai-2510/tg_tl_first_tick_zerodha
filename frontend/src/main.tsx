@@ -2,7 +2,12 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
+import { applyPrefs } from './lib/prefs'
 import './index.css'
+
+// Theme and accent are painted before React mounts, so a dark setup never
+// flashes light on load.
+applyPrefs()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

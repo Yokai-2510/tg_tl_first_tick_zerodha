@@ -144,6 +144,24 @@ async function request<T>(
   return (body?.data ?? body) as T
 }
 
+export interface BrokerCheck {
+  name: string; ok: boolean; detail: string; ms?: number; data?: unknown
+}
+export interface BrokerTestResult {
+  ok: boolean; checks: BrokerCheck[]
+  profile: Record<string, unknown> | null
+  capital: Record<string, number> | null
+}
+export interface CredField {
+  key: string; required: boolean; present: boolean; masked: string; length: number
+}
+export interface CredentialsView {
+  path?: string; data_broker?: string; trade_broker?: string
+  brokers: { broker: string; fields: CredField[]; complete: boolean; missing: string[] }[]
+  token_cache: { exists: boolean; fresh: boolean; issued_at: string | null; detail: string } | null
+  error?: string
+}
+
 export interface LoginResult { token: string; username: string; expires_in: number }
 
 /** Exchange a username and password for a session token. */
@@ -296,5 +314,9 @@ export const api = {
   exitAll: () => post<{ exiting: number }>('/control/exit_all'),
   killSwitch: () => post<{ halted: boolean; exiting: number }>('/control/kill_switch', { confirm: 'KILL' }),
   reconcile: () => post<Record<string, string[]>>('/control/reconcile'),
+  /** Masked view of the credentials the server holds. No secret is ever returned. */
+  brokerCredentials: () => get<CredentialsView>('/broker/credentials'),
+  /** Authenticates for real and exercises profile, margins and the master. */
+  brokerTest: () => post<BrokerTestResult>('/broker/test'),
   wsTicket: () => post<{ ticket: string; expires_in: number }>('/auth/ws-ticket'),
 }

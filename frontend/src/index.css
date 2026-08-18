@@ -3,103 +3,90 @@
 @tailwind utilities;
 
 /*
- * Institutional terminal. Neutral surfaces, 1px lines, no shadows, no gradients.
- * Tokens are defined for light on :root and swapped under prefers-color-scheme,
- * so both themes are always complete.
+ * First-Tick Console — v3 surface.
+ *
+ * Soft-neutral card stack: one page colour, one card colour, one sunken colour,
+ * two line weights, three semantic status colours and a single accent that the
+ * operator picks in Settings. Dark is the default; both themes are complete and
+ * are switched by data-theme on <html> (see lib/prefs.ts), never by a media
+ * query — the operator's choice has to survive a system that says otherwise.
  */
 :root {
-  --bg: 255 255 255;
-  --surface: 250 250 250;
-  --raised: 255 255 255;
-  --line: 228 228 231;
-  --ink: 24 24 27;
-  --muted: 113 113 122;
-  --accent: 37 99 235;
-  --pos: 5 150 105;
-  --neg: 220 38 38;
-  --warn: 217 119 6;
+  --page: #f6f7f9;
+  --card: #ffffff;
+  --sunken: #fafbfc;
+  --border: #eceef2;
+  --border2: #dde1e7;
+  --text: #0d0f14;
+  --muted: #6c7480;
+  --faint: #9ba2ae;
+  --pos: #12a570;
+  --neg: #e0453c;
+  --warn: #c98209;
+  --posbg: #e9f8f1;
+  --negbg: #fdeeed;
+  --warnbg: #fdf5e7;
+  --chip: #f1f3f6;
+  --shadow: 0 1px 2px rgba(13, 15, 20, 0.04), 0 4px 12px rgba(13, 15, 20, 0.03);
+  --accent: #2563eb;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: 10 10 11;
-    --surface: 20 20 22;
-    --raised: 26 26 29;
-    --line: 38 38 42;
-    --ink: 250 250 250;
-    --muted: 161 161 170;
-    --accent: 59 130 246;
-    --pos: 16 185 129;
-    --neg: 239 68 68;
-    --warn: 245 158 11;
-  }
+:root[data-theme='dark'] {
+  --page: #0a0b0e;
+  --card: #131519;
+  --sunken: #0e1013;
+  --border: #212530;
+  --border2: #2c313c;
+  --text: #eef0f4;
+  --muted: #8b94a2;
+  --faint: #5e6673;
+  --pos: #2acb90;
+  --neg: #f2615a;
+  --warn: #e5a72b;
+  --posbg: #0d2119;
+  --negbg: #221315;
+  --warnbg: #201809;
+  --chip: #1a1d24;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
+* { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 
 body {
-  background-color: rgb(var(--bg));
-  color: rgb(var(--ink));
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-               Helvetica, Arial, sans-serif;
+  margin: 0;
+  background: var(--page);
+  color: var(--text);
   font-size: 13px;
-  line-height: 18px;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 /* Every digit in this app aligns. Non-negotiable for scanning columns. */
-body, input, select, button, table, td, th {
+body, input, select, button, textarea, table, td, th {
   font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
+  font-feature-settings: 'tnum' 1;
 }
 
-.mono {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-               "Liberation Mono", monospace;
-}
+input, select, button, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent); text-decoration: underline; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgb(var(--line));
-  border-radius: 5px;
-  border: 2px solid rgb(var(--bg));
+  background: var(--border2);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
 
-:focus-visible {
-  outline: 2px solid rgb(var(--accent));
-  outline-offset: 1px;
-}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-@layer components {
-  .card {
-    @apply bg-surface border border-line rounded-card;
-  }
-  .lbl {
-    @apply text-label uppercase tracking-wider text-muted font-medium;
-  }
-  .btn {
-    @apply inline-flex items-center gap-1.5 h-8 px-3 rounded-card border border-line
-           bg-raised text-ink text-micro font-medium
-           hover:border-muted disabled:opacity-40 disabled:cursor-not-allowed
-           transition-colors duration-100;
-  }
-  .btn-primary {
-    @apply bg-accent border-accent text-white hover:opacity-90 hover:border-accent;
-  }
-  .btn-danger {
-    @apply border-neg/40 text-neg hover:border-neg hover:bg-neg/5;
-  }
-  .inp {
-    @apply h-8 px-2 rounded-card border border-line bg-raised text-ink text-micro
-           w-full focus:border-accent transition-colors duration-100;
-  }
-  .th {
-    @apply lbl text-left font-medium px-3 py-2 bg-surface
-           border-b border-line whitespace-nowrap sticky top-0 z-10;
-  }
-  .td {
-    @apply px-3 py-1.5 border-b border-line/60 whitespace-nowrap;
-  }
-  .num { @apply text-right; }
+.mono {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+               'Liberation Mono', monospace;
 }
