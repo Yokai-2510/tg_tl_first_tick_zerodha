@@ -406,6 +406,12 @@ def create_app(app_state) -> FastAPI:
         # run_test already returns the broker account under "profile"; naming the
         # credential set the same thing would overwrite the account details.
         result["profile_name"] = name
+        # Only the ACTIVE profile's margin is the account we are trading, so only
+        # that one may become the dashboard's live capital. Proving a second
+        # account works must not repaint the figure the operator is watching.
+        if name == active and result.get("capital"):
+            app_state.capital = dict(result["capital"])
+            app_state.capital["simulated"] = False
         return ok(result)
 
     @api.post(f"{API_PREFIX}/broker/test", dependencies=[Depends(auth)])
