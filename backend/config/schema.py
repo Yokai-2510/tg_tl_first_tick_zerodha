@@ -14,7 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ..core.enums import (
     AtmSource, Compression, DataBroker, DiskFullPolicy, FillModel, FallbackTo,
     LogLevel, Moneyness, PnlBasis, PriceSource, Product, RankingBasis,
-    RecorderFormat, RollScope, SnapshotSource, TradeBroker, TradingMode,
+    ExpiryRule, RecorderFormat, RollScope, SnapshotSource, StrikeMode,
+    TradeBroker, TradingMode,
     UploadAfter, Validity,
 )
 from ..core.timeutil import parse_hhmmss
@@ -188,7 +189,27 @@ class ExpiryRollCfg(_Base):
     applies_to: RollScope = RollScope.STOCKS_ONLY
 
 
+class BookScoreCfg(_Base):
+    """Weights for StrikeMode.AUTOMATIC. Higher score wins.
+
+    Spread is a cost and counts against a strike; depth, OI and volume are
+    evidence that the fill will actually happen at the quoted price.
+    """
+
+    max_spread_pct: float = Field(2.0, ge=0.0, le=50.0)
+    min_depth_lots: int = Field(0, ge=0)
+    weight_spread: float = Field(1.0, ge=0.0)
+    weight_depth: float = Field(1.0, ge=0.0)
+    weight_oi: float = Field(0.5, ge=0.0)
+    weight_volume: float = Field(0.5, ge=0.0)
+
+
 class InstrumentsCfg(_Base):
+    #: Which contract to buy once the first positive tick has decided the side.
+    strike_mode: StrikeMode = StrikeMode.FIRST_POSITIVE
+    #: Which expiry to trade. The physical-settlement roll is applied on top.
+    expiry_rule: ExpiryRule = ExpiryRule.NEAREST
+    book_score: BookScoreCfg = Field(default_factory=BookScoreCfg)
     strike_reference: Moneyness = Moneyness.ITM
     strike_offset: int = Field(2, ge=0)
     strikes_per_side: int = Field(4, ge=1, le=20)

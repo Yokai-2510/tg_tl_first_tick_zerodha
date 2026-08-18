@@ -25,6 +25,20 @@ _OPT_SEGMENTS = {"NFO-OPT", "BFO-OPT"}
 # Expiry — BUILD_SPEC §3
 # --------------------------------------------------------------------------
 
+def _monthly_expiries(expiries: Sequence[date]) -> list[date]:
+    """The last expiry in each calendar month -- the monthly contract.
+
+    Derived rather than hardcoded to a weekday, because the monthly expiry moves
+    for holidays and NSE has changed the day more than once.
+    """
+    last_of_month: dict[tuple[int, int], date] = {}
+    for e in expiries:
+        key = (e.year, e.month)
+        if key not in last_of_month or e > last_of_month[key]:
+            last_of_month[key] = e
+    return sorted(last_of_month.values())
+
+
 def resolve_expiry(
     symbol: str,
     expiries: Sequence[date],
@@ -32,6 +46,7 @@ def resolve_expiry(
     *,
     roll_enabled: bool = True,
     buffer_trading_days: int = 1,
+    rule: str = "nearest",
 ) -> date | None:
     """Pick the expiry to trade for `symbol`.
 
@@ -54,6 +69,17 @@ def resolve_expiry(
     future = [e for e in ordered if e >= today]
     if not future:
         return ordered[-1]                    # everything expired; caller decides
+
+    # `rule` chooses the CHAIN; the physical-settlement roll below then decides
+    # whether that chain is too close to expiry to enter safely. They are
+    # independent: asking for `monthly` still rolls on its last two days.
+    rule = (rule or "nearest").lower()
+    if rule == "next" and len(future) > 1:
+        future = future[1:]
+    elif rule == "monthly":
+        monthly = _monthly_expiries(future)
+        if monthly:
+            future = monthly
 
     if is_index(symbol) or not roll_enabled:
         return future[0]

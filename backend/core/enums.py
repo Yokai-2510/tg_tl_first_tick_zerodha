@@ -276,6 +276,31 @@ class UploadAfter(StrEnum):
     SESSION = "session"
     NEVER = "never"
 
+
+class StrikeMode(StrEnum):
+    """How the contract is chosen once the first positive tick has set the side.
+
+    FIRST_POSITIVE -- buy the exact strike that ticked. The side and the contract
+                      are the same decision, and it is the fastest path.
+    AUTOMATIC      -- score the armed strikes of that side on spread, resting
+                      depth, OI and volume, and buy the best one.
+    CUSTOM         -- ignore which strike ticked and buy a fixed offset from ATM
+                      (ITM-2, ATM, OTM-1 ...), per `instruments.strike_reference`
+                      and `strike_offset`.
+    """
+
+    FIRST_POSITIVE = "first_positive"
+    AUTOMATIC = "automatic"
+    CUSTOM = "custom"
+
+
+class ExpiryRule(StrEnum):
+    """Which expiry to trade, before the physical-settlement roll is applied."""
+
+    NEAREST = "nearest"
+    NEXT = "next"
+    MONTHLY = "monthly"
+
 __all__ = [
     "Phase", "ENTRY_PHASES", "EXIT_PHASES",
     "PositionStatus", "OrderStatus", "TERMINAL_STATUSES", "is_terminal",
@@ -286,4 +311,5 @@ __all__ = [
     "RecordKind", "DiskFullPolicy", "FillModel",
     "LogLevel", "DataBroker", "TradeBroker", "RollScope", "SnapshotSource",
     "RecorderFormat", "Compression", "UploadAfter",
+    "StrikeMode", "ExpiryRule",
 ]

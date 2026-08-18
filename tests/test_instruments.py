@@ -160,3 +160,69 @@ def test_build_chain_selects_band_and_both_types():
 def test_build_chain_raises_on_unknown_expiry():
     with pytest.raises(ValueError):
         build_chain(MASTER, "INDIGO", date(2027, 1, 1), spot=5300.0, per_side=1)
+
+
+# ------------------------------------------------------------- expiry rule
+
+def test_expiry_rule_nearest_next_and_monthly():
+    from datetime import date
+    from backend.brokers.kite.instruments import resolve_expiry
+
+    exps = [date(2026, 8, 25), date(2026, 9, 1), date(2026, 9, 8),
+            date(2026, 9, 29), date(2026, 10, 27)]
+    today = date(2026, 8, 19)
+    pick = lambda r: resolve_expiry("NIFTY", exps, today, roll_enabled=False, rule=r)
+    assert pick("nearest") == date(2026, 8, 25)
+    assert pick("next") == date(2026, 9, 1)
+    assert pick("monthly") == date(2026, 8, 25), "last expiry of the month"
+
+
+def test_monthly_skips_the_weeklies_once_the_month_turns():
+    from datetime import date
+    from backend.brokers.kite.instruments import resolve_expiry
+
+    exps = [date(2026, 9, 1), date(2026, 9, 8), date(2026, 9, 29),
+            date(2026, 10, 27)]
+    got = resolve_expiry("NIFTY", exps, date(2026, 8, 26),
+                         roll_enabled=False, rule="monthly")
+    assert got == date(2026, 9, 29)
+
+
+def test_monthly_is_derived_not_hardcoded_to_a_weekday():
+    """NSE has moved the monthly expiry day more than once; the last expiry in
+    each calendar month is the definition that survives that."""
+    from datetime import date
+    from backend.brokers.kite.instruments import _monthly_expiries
+
+    got = _monthly_expiries([date(2026, 8, 4), date(2026, 8, 11),
+                             date(2026, 8, 25), date(2026, 9, 29)])
+    assert got == [date(2026, 8, 25), date(2026, 9, 29)]
+
+
+def test_an_unknown_rule_falls_back_to_nearest(): 
+    from datetime import date
+    from backend.brokers.kite.instruments import resolve_expiry
+
+    exps = [date(2026, 8, 25), date(2026, 9, 29)]
+    assert resolve_expiry("NIFTY", exps, date(2026, 8, 19),
+                          roll_enabled=False, rule="nonsense") == date(2026, 8, 25)
+
+
+def test_next_on_a_single_expiry_does_not_go_empty():
+    from datetime import date
+    from backend.brokers.kite.instruments import resolve_expiry
+
+    only = [date(2026, 8, 25)]
+    assert resolve_expiry("NIFTY", only, date(2026, 8, 19),
+                          roll_enabled=False, rule="next") == date(2026, 8, 25)
+
+
+def test_the_rule_and_the_settlement_roll_are_independent():
+    """Asking for `monthly` must still roll on its last two trading days."""
+    from datetime import date
+    from backend.brokers.kite.instruments import resolve_expiry
+
+    exps = [date(2026, 8, 25), date(2026, 9, 29)]
+    got = resolve_expiry("INFY", exps, date(2026, 8, 25),
+                         roll_enabled=True, buffer_trading_days=1, rule="monthly")
+    assert got == date(2026, 9, 29), "a stock on expiry day must roll"
