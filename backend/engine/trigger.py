@@ -5,9 +5,19 @@ PURE and allocation-light. Called from inside the websocket callback for every
 armed instrument on every tick, so it must not log, must not do I/O, and must
 not raise for control flow (BUILD_SPEC R1).
 
-The rule: fire on the first tick whose price exceeds the reference by more
-than `min_diff`. For options the reference is the previous close, because
-options do not trade in the NSE pre-open (BUILD_SPEC R14).
+THE RULE: fire on the first POSITIVE LTP TICK -- `current LTP > previous LTP`
+for that same strike. Nothing else participates.
+
+Explicitly NOT part of the decision:
+  * best ask / depth  -- read for pricing only; a missing book no longer
+                         discards the tick that should have fired
+  * previous close    -- kept on ArmedState for the strength engine and the
+                         console, but never compared against here
+  * min_diff          -- removed; any positive tick qualifies
+  * confirmation      -- one tick, no second tick, no time window
+
+The first strike of an underlying to post a positive tick decides both the side
+(CE or PE) and, in `first_positive` mode, the contract.
 """
 
 from __future__ import annotations
@@ -23,20 +33,22 @@ class TriggerConfig:
 
     A plain slotted object rather than dict lookups — this runs thousands of
     times per second.
+
+    `min_diff` and `require_depth` are accepted but IGNORED. They are kept in the
+    signature so an existing config still loads; the trigger is now purely
+    tick-over-tick and neither value can change its decision.
     """
 
-    __slots__ = ("min_diff", "require_depth", "min_premium", "max_premium")
+    __slots__ = ("min_premium", "max_premium")
 
     def __init__(
         self,
         *,
-        min_diff: float = 0.0,
-        require_depth: bool = True,
+        min_diff: float = 0.0,          # ignored: retained for config compatibility
+        require_depth: bool = True,     # ignored: depth is for pricing only
         min_premium: float = 0.0,
         max_premium: float = 0.0,
     ) -> None:
-        self.min_diff = float(min_diff)
-        self.require_depth = bool(require_depth)
         self.min_premium = float(min_premium)
         self.max_premium = float(max_premium)
 
@@ -76,24 +88,33 @@ def evaluate(
         return None
 
     price = tick.get("last_price") or 0.0
-    if price <= 0.0 or state.ref_price <= 0.0:
+    if price <= 0.0:
         return None
 
-    diff = price - state.ref_price
-    if diff <= cfg.min_diff:
-        return None
+    # THE RULE: a positive LTP tick. `current LTP > previous LTP`, nothing else.
+    #
+    # prev_ltp is updated on EVERY tick, including the ones that do not fire, so
+    # the comparison always uses the immediately preceding trade. A flat or down
+    # tick just re-seeds and waits.
+    prev = state.prev_ltp
+    state.prev_ltp = price
+    if prev <= 0.0:
+        return None             # first tick for this strike: baseline only
+    if price <= prev:
+        return None             # flat or negative
 
     if cfg.min_premium > 0.0 and price < cfg.min_premium:
         return None
     if cfg.max_premium > 0.0 and price > cfg.max_premium:
         return None
 
+    # Depth is read for PRICING only and never gates the signal. Requiring an ask
+    # used to skip the tick entirely, which meant the first positive tick could be
+    # thrown away on a strike whose book had not arrived yet. The executor prices
+    # from the ask when there is one and falls back to the LTP when there is not.
     bid, ask = best_bid_ask(tick)
-    if cfg.require_depth and ask <= 0.0:
-        # No offer to cross: we cannot price a marketable limit. Skip this
-        # tick and stay armed for the next one.
-        return None
 
+    diff = price - prev
     state.fired = True
 
     inst = state.instrument

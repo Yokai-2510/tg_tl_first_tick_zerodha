@@ -124,9 +124,16 @@ class ArmedState:
     """
 
     instrument: Instrument
-    ref_price: float                 # options: previous close (R14)
+    #: Previous close. NOT part of the entry decision any more -- the trigger is
+    #: tick-over-tick. Kept because the strength engine normalises against it and
+    #: the console displays it.
+    ref_price: float
     lots: int
-    min_diff: float = 0.0
+    #: Last LTP seen for this strike. The entry trigger is `ltp > prev_ltp`, so it
+    #: lives here rather than in a side dict: ArmedState is already the one lookup
+    #: the hot path does per tick, which makes the comparison free.
+    #: 0.0 means "no tick yet" -- the first tick only seeds the baseline.
+    prev_ltp: float = 0.0
     fired: bool = False
 
     @property

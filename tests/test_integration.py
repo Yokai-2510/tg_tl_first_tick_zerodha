@@ -339,6 +339,11 @@ def _arm_and_fire(harness, *, ltp=158.0, ask=158.0, ref=117.85):
     harness.feed.phase = Phase.TRADING
     harness.feed.enable_entries(fire_after_ns=0, deadline_ns=10 ** 18,
                                 session_prefix="sig_test_")
+    # The trigger is tick-over-tick, so a signal needs TWO ticks: one to seed
+    # prev_ltp and one that is higher. A single tick can never fire.
+    harness.feed.on_tick_batch(
+        [make_tick(token=555, ltp=ltp - 1.0, ask=ask - 1.0, bid=ask - 1.5)],
+        recv_ns=mono_ns())
     harness.feed.on_tick_batch(
         [make_tick(token=555, ltp=ltp, ask=ask, bid=ask - 0.5)], recv_ns=mono_ns())
     return harness.feed.intent_q.get_nowait()
@@ -347,7 +352,10 @@ def _arm_and_fire(harness, *, ltp=158.0, ask=158.0, ref=117.85):
 def test_paper_entry_end_to_end(harness):
     """Tick -> signal -> marketable limit -> filled paper position."""
     sig = _arm_and_fire(harness)
-    assert sig.diff == pytest.approx(158.0 - 117.85)
+    # diff is now the POSITIVE TICK itself (ltp - prev_ltp), not the
+    # distance from the previous close.
+    assert sig.diff == pytest.approx(1.0)
+    assert sig.tick_price == pytest.approx(158.0)
 
     pos = harness.executor.execute_entry(sig)
     assert pos is not None
@@ -706,9 +714,14 @@ def test_the_same_symbol_cannot_be_entered_twice(harness):
     """max_per_symbol 1 stops pyramiding when a second signal arrives."""
     first = harness.executor.execute_entry(_arm_and_fire(harness))
     assert first is not None
-    harness.feed._armed[555].fired = False          # let it fire again
-    again = harness.executor.execute_entry(_arm_and_fire(harness))
-    assert again is None, "a second position on the same symbol was allowed"
+    harness.feed._armed[555].fired = False          # pretend it could fire again
+    harness.feed._armed[555].prev_ltp = 0.0
+    # Suppressed by the underlying latch before the executor is ever consulted.
+    harness.feed.on_tick_batch(
+        [make_tick(token=555, ltp=200.0, ask=200.0, bid=199.5)], recv_ns=mono_ns())
+    harness.feed.on_tick_batch(
+        [make_tick(token=555, ltp=201.0, ask=201.0, bid=200.5)], recv_ns=mono_ns())
+    assert harness.feed.intent_q.empty(), "a second signal on the same symbol"
     assert len(harness.book.open_positions()) == 1
 
 
@@ -807,8 +820,14 @@ def _fire_symbol(harness, token, tradingsymbol, underlying, *, ltp=100.0, ref=90
     harness.feed.enable_entries(fire_after_ns=0, deadline_ns=10 ** 18,
                                 session_prefix=f"s{token}_")
     harness.feed.on_tick_batch(
+        [make_tick(token=token, ltp=ltp - 1.0, ask=ltp - 1.0, bid=ltp - 1.5)],
+        recv_ns=mono_ns())
+    harness.feed.on_tick_batch(
         [make_tick(token=token, ltp=ltp, ask=ltp, bid=ltp - 0.5)], recv_ns=mono_ns())
-    return harness.feed.intent_q.get_nowait()
+    try:
+        return harness.feed.intent_q.get_nowait()
+    except Exception:
+        return None          # the per-underlying latch suppressed it at source
 
 
 def test_a_second_strike_on_the_same_underlying_is_refused(harness):
@@ -817,9 +836,9 @@ def test_a_second_strike_on_the_same_underlying_is_refused(harness):
     a = harness.executor.execute_entry(
         _fire_symbol(harness, 901, "NIFTY2681824350CE", "NIFTY"))
     assert a is not None
-    b = harness.executor.execute_entry(
-        _fire_symbol(harness, 902, "NIFTY2681824400CE", "NIFTY"))
-    assert b is None, "a second NIFTY strike was allowed"
+    # The second strike must not even produce a signal now -- the feed latches the
+    # underlying, so the losing strikes are silent instead of being rejected later.
+    assert _fire_symbol(harness, 902, "NIFTY2681824400CE", "NIFTY") is None
     assert len(harness.book.open_positions()) == 1
 
 
@@ -828,9 +847,7 @@ def test_opposite_sides_of_one_underlying_cannot_both_open(harness):
     ce = harness.executor.execute_entry(
         _fire_symbol(harness, 911, "TECHM26AUG1680CE", "TECHM"))
     assert ce is not None
-    pe = harness.executor.execute_entry(
-        _fire_symbol(harness, 912, "TECHM26AUG1660PE", "TECHM"))
-    assert pe is None, "CE and PE on the same underlying both opened"
+    assert _fire_symbol(harness, 912, "TECHM26AUG1660PE", "TECHM") is None,         "CE and PE on the same underlying both produced a signal"
 
 
 def test_a_different_underlying_still_opens(harness):
@@ -856,6 +873,9 @@ def test_the_slot_frees_after_the_position_closes(harness):
     harness.executor.request_exit(pos, ExitTrigger.MANUAL_API)
     harness.executor.execute_exit(pos, ExitTrigger.MANUAL_API)
     assert harness.book.count_for_underlying("NIFTY") == 0
+    # The book frees the slot, but the feed latch is per SESSION by design: one
+    # entry per underlying per day, so re-entry needs an explicit reset.
+    harness.feed._underlying_taken.discard("NIFTY")
     assert harness.executor.execute_entry(
         _fire_symbol(harness, 942, "NIFTY2681824400CE", "NIFTY")) is not None
 

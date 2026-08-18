@@ -147,7 +147,8 @@ def test_feed_and_arming_state_is_cleared_between_days():
     feed.arm([inst], {1: 100.0})
     feed.phase = Phase.TRADING
     feed.enable_entries(fire_after_ns=0, deadline_ns=10**18, session_prefix="d1_")
-    feed.on_tick_batch([make_tick(token=1, ltp=110.0)], recv_ns=1)
+    feed.on_tick_batch([make_tick(token=1, ltp=109.0)], recv_ns=1)   # seed
+    feed.on_tick_batch([make_tick(token=1, ltp=110.0)], recv_ns=1)   # positive tick
     assert feed.intent_q.qsize() == 1
     assert feed.armed_view()[0]["fired"] is True
 
@@ -161,7 +162,8 @@ def test_feed_and_arming_state_is_cleared_between_days():
     feed.enable_entries(fire_after_ns=0, deadline_ns=10**18, session_prefix="d2_")
     assert feed.armed_view()[0]["fired"] is False
     assert feed.armed_view()[0]["ref_price"] == 200.0, "reference must be the new day's"
-    feed.on_tick_batch([make_tick(token=1, ltp=210.0)], recv_ns=1)
+    feed.on_tick_batch([make_tick(token=1, ltp=209.0)], recv_ns=1)   # seed
+    feed.on_tick_batch([make_tick(token=1, ltp=210.0)], recv_ns=1)   # positive tick
     assert feed.intent_q.qsize() == 2, "day 2 must be able to fire"
 
 

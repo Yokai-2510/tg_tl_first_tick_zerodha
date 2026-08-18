@@ -202,9 +202,12 @@ def test_normalised_upstox_tick_drives_the_trigger_unchanged():
     assert best_bid_ask(tick) == (157.5, 158.0)
 
     armed = make_armed(ref_price=117.85, token=tick["instrument_token"])
+    evaluate(tick, armed, TriggerConfig())  # seed prev_ltp
+    tick = dict(tick, last_price=(tick.get('last_price') or 0) + 1.0)
     sig = evaluate(tick, armed, TriggerConfig())
     assert sig is not None
-    assert sig.diff == pytest.approx(40.15)
+    # diff is the positive tick itself now, not distance from the close.
+    assert sig.diff == pytest.approx(1.0)
     assert sig.best_ask == 158.0
 
 

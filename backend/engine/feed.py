@@ -48,6 +48,9 @@ class Feed:
         self._armed: dict[int, ArmedState] = {}
         self._last: dict[int, TickView] = {}
         self._symbols: dict[int, str] = {}
+        #: Underlyings whose entry has already been decided this session. Written
+        #: only by the websocket thread, so a plain set needs no lock.
+        self._underlying_taken: set[str] = set()
         self._lock = threading.RLock()          # guards ARMING, not the hot path
 
         self.phase: str = Phase.BOOT
@@ -82,7 +85,6 @@ class Feed:
                     instrument=inst,
                     ref_price=ref,
                     lots=int(lots.get(inst.token, default_lots)),
-                    min_diff=self.trigger_cfg.min_diff,
                 )
                 self._symbols[inst.token] = inst.tradingsymbol
             return len(self._armed)
@@ -101,6 +103,8 @@ class Feed:
             self._armed.clear()
             self._last.clear()
             self._symbols.clear()
+            # Without this every underlying stays "taken" and day two cannot trade.
+            self._underlying_taken.clear()
             self._sig_seq = 0
             self.signals_fired = 0
             self.ticks_seen = 0
@@ -185,30 +189,57 @@ class Feed:
         # 3. Entry evaluation — cheapest gates first.
         if not self.entries_enabled or self.phase != Phase.TRADING:
             return
-        if recv_ns < self._fire_after_ns or recv_ns > self._deadline_ns:
-            return
 
         armed = self._armed
         if not armed:
             return
 
+        # Ticks OUTSIDE the window still seed prev_ltp; they just cannot fire.
+        #
+        # This matters for latency. The window opens at trading_start +
+        # fire_after_seconds, and if the first tick inside it were spent
+        # establishing a baseline, the actual first positive tick would be thrown
+        # away. Seeding through the pre-window second means we arrive at the open
+        # already holding a previous LTP and can fire on the very first uptick.
+        in_window = self._fire_after_ns <= recv_ns <= self._deadline_ns
+
         cfg = self.trigger_cfg
+        taken = self._underlying_taken
         for tick in ticks:
             state = armed.get(tick.get("instrument_token"))
             if state is None or state.fired:
                 continue
+            # One trade per underlying: the FIRST strike of a name to post a
+            # positive tick decides the side and the contract, and every other
+            # strike of that name is done for the session. Latching here rather
+            # than only in the executor means the losing strikes never even
+            # produce a signal -- on 13 Aug four NIFTY strikes each emitted one
+            # and the executor rejected three.
+            #
+            # prev_ltp still has to be maintained for those strikes, because the
+            # strength engine reads it, so this check sits AFTER evaluate() seeds
+            # the baseline rather than skipping the tick outright.
             self._sig_seq += 1
             signal = evaluate(
                 tick, state, cfg,
                 sig_id=f"{self._session_prefix}{self._sig_seq:03d}",
                 t_tick_ns=recv_ns,
             )
-            if signal is not None:
-                self.signals_fired += 1
-                self.intent_q.put_nowait(signal)
-                cb = self.on_signal
-                if cb is not None:
-                    cb(signal)
+            if signal is None:
+                continue
+            if not in_window:
+                # Baseline seeded, but the window is shut: undo the latch so the
+                # strike stays armed for a real in-window tick.
+                state.fired = False
+                continue
+            if signal.underlying in taken:
+                continue
+            taken.add(signal.underlying)
+            self.signals_fired += 1
+            self.intent_q.put_nowait(signal)
+            cb = self.on_signal
+            if cb is not None:
+                cb(signal)
 
     # -- stats -------------------------------------------------------------
 

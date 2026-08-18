@@ -110,11 +110,13 @@ def test_feed_fires_only_inside_the_window():
     feed.phase = Phase.TRADING
     feed.enable_entries(fire_after_ns=1000, deadline_ns=5000, session_prefix="sig_")
 
+    # Out-of-window ticks cannot fire, but they DO seed prev_ltp -- so that the
+    # first in-window tick is not wasted establishing a baseline.
     feed.on_tick_batch([make_tick(token=1, ltp=110.0)], recv_ns=500)      # too early
     assert feed.intent_q.qsize() == 0
     feed.on_tick_batch([make_tick(token=1, ltp=110.0)], recv_ns=9000)     # too late
     assert feed.intent_q.qsize() == 0
-    feed.on_tick_batch([make_tick(token=1, ltp=110.0)], recv_ns=2000)     # in window
+    feed.on_tick_batch([make_tick(token=1, ltp=111.0)], recv_ns=2000)     # in window
     assert feed.intent_q.qsize() == 1
 
 
@@ -416,3 +418,79 @@ def test_connect_feed_raises_when_the_socket_does_not_come_up(config_obj, tmp_pa
     assert calls["n"] == 1
     assert feed.wait_connected(timeout=0.3) is False
     assert feed.is_alive() is False
+
+
+# --------------------------------- first positive tick, at the Feed level
+
+def _armed_feed(tokens_and_underlyings):
+    """A feed armed with several strikes, some sharing an underlying."""
+    from backend.core.models import Instrument
+    from backend.core.enums import InstrumentKind
+    feed = _feed()
+    insts, refs = [], {}
+    for tok, sym, und in tokens_and_underlyings:
+        insts.append(Instrument(token=tok, tradingsymbol=sym, exchange="NFO",
+                                underlying=und, kind=InstrumentKind.OPTION,
+                                lot_size=1, instrument_type=sym[-2:]))
+        refs[tok] = 100.0
+    feed.arm(insts, refs)
+    feed.phase = Phase.TRADING
+    feed.enable_entries(fire_after_ns=0, deadline_ns=10**18, session_prefix="t_")
+    return feed
+
+
+def test_only_the_first_strike_of_an_underlying_emits_a_signal():
+    """13 Aug opened four NIFTY strikes. Now the losing strikes are silent."""
+    feed = _armed_feed([(1, "NIFTY24300CE", "NIFTY"), (2, "NIFTY24350CE", "NIFTY"),
+                        (3, "NIFTY24400CE", "NIFTY")])
+    for tok in (1, 2, 3):
+        feed.on_tick_batch([make_tick(token=tok, ltp=50.0)], recv_ns=1)   # seed all
+    feed.on_tick_batch([make_tick(token=2, ltp=51.0)], recv_ns=2)         # 2 fires
+    feed.on_tick_batch([make_tick(token=1, ltp=52.0)], recv_ns=3)         # too late
+    feed.on_tick_batch([make_tick(token=3, ltp=53.0)], recv_ns=4)         # too late
+    assert feed.intent_q.qsize() == 1
+    assert feed.intent_q.get_nowait().tradingsymbol == "NIFTY24350CE"
+
+
+def test_ce_and_pe_of_one_underlying_cannot_both_signal():
+    feed = _armed_feed([(1, "TECHM1680CE", "TECHM"), (2, "TECHM1660PE", "TECHM")])
+    feed.on_tick_batch([make_tick(token=1, ltp=20.0),
+                        make_tick(token=2, ltp=30.0)], recv_ns=1)
+    feed.on_tick_batch([make_tick(token=1, ltp=21.0)], recv_ns=2)
+    feed.on_tick_batch([make_tick(token=2, ltp=31.0)], recv_ns=3)
+    assert feed.intent_q.qsize() == 1, "both sides of one name signalled"
+
+
+def test_different_underlyings_each_get_one_signal():
+    feed = _armed_feed([(1, "NIFTY24300CE", "NIFTY"), (2, "TECHM1680CE", "TECHM")])
+    feed.on_tick_batch([make_tick(token=1, ltp=50.0),
+                        make_tick(token=2, ltp=20.0)], recv_ns=1)
+    feed.on_tick_batch([make_tick(token=1, ltp=51.0),
+                        make_tick(token=2, ltp=21.0)], recv_ns=2)
+    assert feed.intent_q.qsize() == 2
+
+
+def test_a_pre_window_tick_seeds_so_the_open_can_fire_immediately():
+    """The latency point: arriving at the open already holding a baseline means
+    the very first in-window uptick fires, instead of being spent as one."""
+    feed = _feed()
+    feed.arm([make_instrument(token=1)], {1: 100.0})
+    feed.phase = Phase.TRADING
+    feed.enable_entries(fire_after_ns=1000, deadline_ns=10**18, session_prefix="s_")
+
+    feed.on_tick_batch([make_tick(token=1, ltp=50.0)], recv_ns=100)   # pre-window
+    assert feed.intent_q.qsize() == 0
+    assert feed._armed[1].prev_ltp == 50.0, "pre-window tick must seed"
+    assert feed._armed[1].fired is False, "and must not consume the latch"
+
+    feed.on_tick_batch([make_tick(token=1, ltp=51.0)], recv_ns=1500)  # first in-window
+    assert feed.intent_q.qsize() == 1, "the first in-window uptick must fire"
+
+
+def test_the_underlying_latch_clears_between_days():
+    feed = _armed_feed([(1, "NIFTY24300CE", "NIFTY")])
+    feed.on_tick_batch([make_tick(token=1, ltp=50.0)], recv_ns=1)
+    feed.on_tick_batch([make_tick(token=1, ltp=51.0)], recv_ns=2)
+    assert feed.intent_q.qsize() == 1
+    feed.reset()
+    assert feed._underlying_taken == set(), "day two could never trade this name"
