@@ -13,6 +13,7 @@ import asyncio
 import json
 import re
 import secrets
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -345,6 +346,65 @@ def create_app(app_state) -> FastAPI:
             "brokers": credential_view(creds, brokers),
             "token_cache": token_cache_state(cfg.system.data_dir),
         })
+
+    @api.get(f"{API_PREFIX}/broker/profiles", dependencies=[Depends(auth)])
+    async def broker_profiles():
+        """Every credential profile, masked, and which one is active."""
+        from ..config.loader import profiles as load_profiles
+        try:
+            known, active = load_profiles(app_state.credentials_path)
+        except Exception as exc:
+            return ok({"error": f"{type(exc).__name__}: {exc}",
+                       "profiles": [], "active": None})
+        out = []
+        for name, block in sorted(known.items()):
+            view = credential_view({"zerodha": block}, ["zerodha"])[0]
+            out.append({"name": name, "active": name == active,
+                        "broker": str(block.get("broker") or "zerodha"),
+                        "fields": view["fields"], "complete": view["complete"],
+                        "missing": view["missing"]})
+        return ok({"profiles": out, "active": active,
+                   "path": str(app_state.credentials_path),
+                   "token_cache": token_cache_state(cfg.system.data_dir)})
+
+    @api.post(f"{API_PREFIX}/broker/profiles/{{name}}/activate",
+              dependencies=[Depends(auth)])
+    async def activate_profile(name: str):
+        """Switch profiles. Takes effect on the next broker connect, not now."""
+        from ..config.loader import set_active_profile
+        try:
+            chosen = set_active_profile(name, app_state.credentials_path)
+        except Exception as exc:
+            raise HTTPException(409, str(exc))
+        app_state.log.info(f"active credential profile -> {chosen}")
+        return ok({"active": chosen,
+                   "note": "Applies at the next broker connect. Restart to use it "
+                           "for the current session."})
+
+    @api.post(f"{API_PREFIX}/broker/profiles/{{name}}/test",
+              dependencies=[Depends(auth)])
+    async def test_profile(name: str):
+        """Authenticate one specific profile without switching to it."""
+        from ..config.loader import load_credentials
+        try:
+            creds = load_credentials(app_state.credentials_path, profile=name)
+        except Exception as exc:
+            raise HTTPException(409, str(exc))
+        # A non-active profile must not clobber the live token cache, so it gets a
+        # scratch directory: a successful login there proves the credentials work
+        # without replacing the session the engine is currently using.
+        from ..config.loader import profiles as load_profiles
+        _, active = load_profiles(app_state.credentials_path)
+        data_dir = cfg.system.data_dir
+        if name != active:
+            data_dir = str(Path(cfg.system.data_dir) / "profile-probe" / name)
+            Path(data_dir).mkdir(parents=True, exist_ok=True)
+        result = await asyncio.to_thread(
+            run_test, creds=creds, data_dir=data_dir,
+            broker=str(creds.get("broker") or cfg.broker.data_broker),
+            limiter=app_state.limiter)
+        result["profile"] = name
+        return ok(result)
 
     @api.post(f"{API_PREFIX}/broker/test", dependencies=[Depends(auth)])
     async def broker_test():

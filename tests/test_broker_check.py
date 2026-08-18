@@ -209,7 +209,9 @@ def test_both_credential_file_layouts_load(tmp_path):
     flat.write_text(json.dumps(FLAT), encoding="utf-8")
     a = load_credentials(flat)
     assert a["api_key"] == "kitefx9f2a1234"
-    assert isinstance(a["broker_notes"], dict), "a nested section must stay a dict"
+    # load_credentials now returns the ACTIVE PROFILE's block, so unrelated nested
+    # sections are no longer folded into it -- see tests/test_profiles.py.
+    assert "broker_notes" not in a
 
     nested = tmp_path / "nested.json"
     nested.write_text(json.dumps({
@@ -218,7 +220,6 @@ def test_both_credential_file_layouts_load(tmp_path):
     }), encoding="utf-8")
     b = load_credentials(nested)
     assert b["api_key"] == "kitefx9f2a1234", "nested zerodha must be lifted"
-    assert isinstance(b["zerodha"], dict)
 
 
 def test_the_shipped_example_credentials_file_actually_loads():

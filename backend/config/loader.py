@@ -47,6 +47,37 @@ def parse(raw: dict[str, Any]) -> Config:
         raise ConfigError(_format_errors(exc)) from None
 
 
+def write_json_atomic(path: Path, data: dict, *, mode: int = 0o600) -> None:
+    """Write JSON via a temp file + replace, so a crash cannot truncate the file.
+
+    Credentials are the one file where a half-written save locks you out of the
+    broker, so the rename is atomic and the mode is restored afterwards -- a fresh
+    temp file would otherwise land as 0644.
+    """
+    import os
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+            fh.write(chr(10))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass                      # Windows and some mounts do not support it
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def read_json(path: Path) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8-sig")
@@ -72,41 +103,93 @@ def load(path: Path | str = DEFAULT_CONFIG_PATH) -> Config:
 ZERODHA_REQUIRED = ("api_key", "api_secret", "user_id", "password", "totp_key")
 
 
-def load_credentials(path: Path | str = DEFAULT_CREDENTIALS_PATH) -> dict:
-    """Read broker credentials. Never logged, never returned by the API.
+DEFAULT_PROFILE = "default"
 
-    Two layouts exist in the wild and both are accepted:
 
-      * Zerodha keys at the TOP LEVEL, with other brokers in their own section --
-        what the deployed file actually looks like.
-      * Every broker in its own section, including `zerodha` -- what
-        credentials.example.json shows. A nested zerodha block is lifted to the top
-        level so callers that index creds["api_key"] keep working either way.
+def _profile_view(raw: dict) -> tuple[dict[str, dict], str]:
+    """Normalise any credentials.json layout into {name: block}, active_name.
 
-    Nested sections are preserved as dicts. The previous `str(v)` over every value
-    silently turned any nested block into the *repr of a dict*, so anything
-    reading it got a string and failed with 'str' object has no attribute 'get'.
+    Three layouts are accepted, because all three exist:
+
+      1. profiles     {"active_profile": "main", "profiles": {"main": {...}}}
+      2. per-broker   {"zerodha": {...}}
+      3. flat         {"api_key": ..., "api_secret": ...}   <- the deployed file
+
+    2 and 3 become a single profile named "default", so everything downstream
+    deals with profiles only and the old files keep working untouched.
     """
-    data = read_json(Path(path))
+    profiles_raw = raw.get("profiles")
+    if isinstance(profiles_raw, dict) and profiles_raw:
+        profiles = {
+            str(name): {k: v for k, v in block.items() if not k.startswith("_")}
+            for name, block in profiles_raw.items()
+            if isinstance(block, dict)
+        }
+        active = str(raw.get("active_profile") or "").strip()
+        if active not in profiles:
+            active = next(iter(profiles))
+        return profiles, active
 
-    out: dict = {}
-    for key, value in data.items():
-        if key.startswith("_"):
-            continue
-        out[key] = dict(value) if isinstance(value, dict) else str(value)
-
-    nested = data.get("zerodha")
+    block: dict = {}
+    nested = raw.get("zerodha")
     if isinstance(nested, dict):
-        for key, value in nested.items():
-            if not key.startswith("_"):
-                out.setdefault(key, str(value))
+        block.update({k: v for k, v in nested.items() if not k.startswith("_")})
+    # Top level wins over a nested section: on the deployed host both were present
+    # and only the top-level keys were the ones that actually logged in.
+    block.update({k: v for k, v in raw.items()
+                  if not isinstance(v, dict) and not k.startswith("_")})
+    return {DEFAULT_PROFILE: block}, DEFAULT_PROFILE
 
+
+def profiles(path: Path | str = DEFAULT_CREDENTIALS_PATH) -> tuple[dict[str, dict], str]:
+    """All credential profiles and the active one. Never raises on completeness."""
+    return _profile_view(read_json(Path(path)))
+
+
+def set_active_profile(name: str, path: Path | str = DEFAULT_CREDENTIALS_PATH) -> str:
+    """Switch the active profile, upgrading the file to the profiles layout.
+
+    Rewriting rather than patching in place is deliberate: a flat file has no
+    `active_profile` to set, so it is migrated to the profiles shape on the first
+    switch and every later switch is a one-key edit.
+    """
+    p = Path(path)
+    raw = read_json(p)
+    known, _ = _profile_view(raw)
+    if name not in known:
+        raise ConfigError(
+            f"unknown profile {name!r}; available: {', '.join(sorted(known)) or 'none'}")
+    out = {"_doc": raw.get("_doc", "Broker credentials. chmod 600. NEVER commit."),
+           "active_profile": name,
+           "profiles": known}
+    write_json_atomic(p, out)
+    return name
+
+
+def load_credentials(path: Path | str = DEFAULT_CREDENTIALS_PATH,
+                     *, profile: str | None = None) -> dict:
+    """The ACTIVE profile's credentials, flat. Never logged, never returned by API.
+
+    Returns the block itself so existing callers that index creds["api_key"] keep
+    working with no change, whichever layout the file uses.
+    """
+    raw = read_json(Path(path))
+    known, active = _profile_view(raw)
+    name = profile or active
+    block = known.get(name)
+    if block is None:
+        raise ConfigError(
+            f"{path}: unknown profile {name!r}; available: "
+            f"{', '.join(sorted(known)) or 'none'}")
+
+    out = {k: (dict(v) if isinstance(v, dict) else str(v)) for k, v in block.items()}
     missing = [k for k in ZERODHA_REQUIRED if not str(out.get(k, "")).strip()]
     if missing:
         raise ConfigError(
-            f"{path} missing required field(s): {', '.join(missing)}. Put the Zerodha "
-            f"keys at the top level, or inside a \"zerodha\" section."
+            f"{path} profile {name!r} missing required field(s): "
+            f"{', '.join(missing)}."
         )
+    out["_profile"] = name
     return out
 
 
