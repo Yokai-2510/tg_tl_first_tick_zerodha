@@ -358,3 +358,61 @@ def test_stats_and_reset():
     assert rl.stats()["order"]["rejected"] == 1
     rl.reset()
     assert rl.acquire("order") is True
+
+
+# ------------------------------------------- the feed must never fail silently
+
+def test_wait_connected_returns_true_once_the_socket_reports_connected():
+    """The watchdog that turns a dead feed into a loud failure."""
+    import threading
+    from backend.brokers.kite.ticker import KiteFeed
+
+    feed = KiteFeed("k", "t")
+    assert feed.wait_connected(timeout=0.2) is False, "not connected yet"
+
+    def connect_soon():
+        import time
+        time.sleep(0.15)
+        feed.stats.connected = True
+
+    threading.Thread(target=connect_soon, daemon=True).start()
+    assert feed.wait_connected(timeout=3.0) is True
+
+
+def test_wait_connected_times_out_when_the_socket_never_opens():
+    """Exactly the 14-18 Aug failure: connect() returns fine, nothing connects."""
+    from backend.brokers.kite.ticker import KiteFeed
+    import time
+
+    feed = KiteFeed("k", "t")
+    t0 = time.monotonic()
+    assert feed.wait_connected(timeout=0.5) is False
+    assert 0.4 <= time.monotonic() - t0 < 2.0, "must actually wait, then give up"
+
+
+def test_is_alive_requires_both_started_and_connected():
+    from backend.brokers.kite.ticker import KiteFeed
+
+    feed = KiteFeed("k", "t")
+    assert feed.is_alive() is False
+    feed.stats.connected = True
+    assert feed.is_alive() is False, "connected but never started is not alive"
+    feed._started = True
+    assert feed.is_alive() is True
+
+
+def test_connect_feed_raises_when_the_socket_does_not_come_up(config_obj, tmp_path):
+    """A feed that never connects must fail the phase, not arm against nothing."""
+    from backend.brokers.kite.ticker import KiteFeed
+
+    calls = {"n": 0}
+
+    class DeadFeed(KiteFeed):
+        def connect(self):
+            calls["n"] += 1          # returns cleanly, socket never opens
+
+    feed = DeadFeed("k", "t")
+    assert feed.connect() is None
+    assert calls["n"] == 1
+    assert feed.wait_connected(timeout=0.3) is False
+    assert feed.is_alive() is False

@@ -13,6 +13,7 @@ Two rules that this module exists to enforce:
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -136,6 +137,28 @@ class KiteFeed:
         self._kws = kws
         self._started = True
         kws.connect(threaded=True, disable_ssl_verification=False)
+
+    def wait_connected(self, timeout: float = 15.0) -> bool:
+        """Block until the socket is actually up. Returns False on timeout.
+
+        `connect(threaded=True)` returns immediately and NEVER raises when the
+        connection cannot be established, so without this a dead feed looks exactly
+        like a healthy one. That is not hypothetical: KiteTicker runs on a Twisted
+        reactor, a stopped reactor cannot be restarted in-process, and after the
+        first EOD teardown every later connect() silently did nothing. Five
+        sessions (14-18 Aug) armed 230+ instruments against a socket that was never
+        open and took zero ticks, with no error anywhere.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.stats.connected:
+                return True
+            time.sleep(0.1)
+        return False
+
+    def is_alive(self) -> bool:
+        """Connected AND actually delivering, as far as we can tell."""
+        return bool(self._started and self.stats.connected)
 
     def subscribe_now(self, tokens: list[int], mode: str) -> None:
         """Add to the plan and push to a live socket (used for wave 2)."""

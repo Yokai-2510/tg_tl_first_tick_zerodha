@@ -1,0 +1,22 @@
+# Restart the engine before every trading session.
+#
+# WHY THIS EXISTS: KiteTicker runs on a Twisted reactor, and a Twisted reactor
+# CANNOT be restarted once stopped. The daily EOD session reset closed the feed,
+# which stopped the reactor, so every later connect() silently never established
+# a socket. The engine kept walking its phases and arming instruments against a
+# dead feed -- five sessions in a row (14-18 Aug) armed 230+ instruments and saw
+# ZERO ticks, with nothing in the logs but a missing FEED CONNECTED line.
+#
+# A fresh process per session sidesteps the reactor limitation entirely. 08:30 is
+# 15 minutes before phase 1 (08:45), so a slow start still has room, and it is
+# well clear of the 06:00 IST Kite token reset.
+[Unit]
+Description=Restart First-Tick before the trading session
+
+[Timer]
+OnCalendar=Mon..Fri 08:30 Asia/Kolkata
+Persistent=false
+Unit=firsttick-restart.service
+
+[Install]
+WantedBy=timers.target

@@ -100,6 +100,8 @@ class TimeoutsCfg(_Base):
 
 
 class WsCfg(_Base):
+    #: How long connect_feed waits for the socket before declaring the session dead.
+    connect_timeout_s: int = Field(20, ge=5, le=120)
     reconnect_max_tries: int = Field(50, ge=1)
     reconnect_max_delay_s: int = Field(30, ge=1)
 

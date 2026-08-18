@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart the First-Tick engine (pre-session)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart firsttick.service

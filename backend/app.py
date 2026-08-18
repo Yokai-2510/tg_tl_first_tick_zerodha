@@ -181,6 +181,23 @@ class Application:
         for mode, tokens in plan.by_mode().items():
             self.kfeed.add(tokens, mode)
         self.kfeed.connect()
+
+        # connect() is fire-and-forget and never raises, so a socket that fails to
+        # open is indistinguishable from a healthy one. Blocking here turns five
+        # silent dead sessions into one loud PHASE_1_FAIL. The scheduler treats a
+        # FEED_LIVE hook exception as a failed pre-market, which is exactly right:
+        # arming instruments against a feed that will never tick is worse than
+        # not trading.
+        if not self.kfeed.wait_connected(self.cfg.broker.ws.connect_timeout_s):
+            self.recorder.event("FEED_CONNECT_TIMEOUT",
+                                {"seconds": self.cfg.broker.ws.connect_timeout_s})
+            raise RuntimeError(
+                f"market feed did not connect within "
+                f"{self.cfg.broker.ws.connect_timeout_s}s. Nothing can trade without "
+                f"ticks. If this followed an EOD teardown, the Twisted reactor is "
+                f"dead and the PROCESS must be restarted (see the "
+                f"firsttick-restart.timer unit)."
+            )
         self.subscribed_count = plan.count
         self.recorder.event("SUBSCRIBED", {"wave": 1, "count": plan.count,
                                            "modes": {k: len(v) for k, v in
