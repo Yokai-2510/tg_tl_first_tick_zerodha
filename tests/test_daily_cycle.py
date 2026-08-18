@@ -163,3 +163,39 @@ def test_feed_and_arming_state_is_cleared_between_days():
     assert feed.armed_view()[0]["ref_price"] == 200.0, "reference must be the new day's"
     feed.on_tick_batch([make_tick(token=1, ltp=210.0)], recv_ns=1)
     assert feed.intent_q.qsize() == 2, "day 2 must be able to fire"
+
+
+def test_entry_window_is_anchored_to_the_clock_not_to_restart_time(config_obj):
+    """A restart after the window must NOT reopen it.
+
+    On 18 Aug a restart at 09:51 fired 11 entries, 33 minutes after the window
+    should have shut, because fire_after was `max(0, start-now)` -- which clamps
+    to zero once the open has passed.
+    """
+    from datetime import timedelta
+    from backend.core.timeutil import today_at
+
+    e, s = config_obj.entry, config_obj.schedule
+    for now_s, should_arm in (("09:14:00", True), ("09:15:30", True),
+                              ("09:20:00", False), ("11:00:00", False)):
+        now = at(WED, now_s[:5]).replace(second=int(now_s[-2:]))
+        start = today_at(s.trading_start, now)
+        opens = start + timedelta(seconds=e.fire_after_seconds)
+        closes = opens + timedelta(seconds=e.deadline_seconds)
+        armed = now < closes
+        assert armed is should_arm, f"at {now_s}: armed={armed}, expected {should_arm}"
+
+
+def test_the_window_length_never_grows_with_a_late_start(config_obj):
+    """Whenever TRADING is entered, the window still ends at the same wall time."""
+    from datetime import timedelta
+    from backend.core.timeutil import today_at
+
+    e, s = config_obj.entry, config_obj.schedule
+    start = today_at(s.trading_start, at(WED, "09:15"))
+    closes = start + timedelta(seconds=e.fire_after_seconds + e.deadline_seconds)
+    for now_s in ("09:15", "09:16", "09:17"):
+        now = at(WED, now_s)
+        remaining = (closes - now).total_seconds()
+        assert remaining <= e.fire_after_seconds + e.deadline_seconds, \
+            "a later start must not extend the window"

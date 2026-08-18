@@ -8,6 +8,7 @@ real logic lives in the modules it wires together.
 from __future__ import annotations
 
 import secrets
+from datetime import timedelta
 import threading
 import time
 from pathlib import Path
@@ -278,16 +279,36 @@ class Application:
         s = self.cfg.schedule
         now = now_ist()
         start = today_at(s.trading_start, now)
-        fire_after = mono_ns() + int(
-            max(0.0, (start - now).total_seconds() + self.cfg.entry.fire_after_seconds)
-            * 1e9)
-        deadline = fire_after + int(self.cfg.entry.deadline_seconds * 1e9)
+
+        # The entry window is an ABSOLUTE wall-clock window anchored to
+        # trading_start -- never "N seconds from whenever this ran".
+        #
+        # It used to be `mono_ns() + max(0.0, start - now + fire_after)`, which
+        # clamps to zero once the open has passed, so entering TRADING late opened
+        # a fresh window starting immediately. A restart at 09:51 today re-armed
+        # and fired 11 entries, 33 minutes after the window should have shut. Any
+        # mid-session restart traded.
+        opens_at = start + timedelta(seconds=self.cfg.entry.fire_after_seconds)
+        closes_at = opens_at + timedelta(seconds=self.cfg.entry.deadline_seconds)
+
         self.feed.phase = Phase.TRADING
+        if now >= closes_at:
+            self.feed.disarm()
+            self.log.warning(
+                f"entry window already closed "
+                f"({opens_at:%H:%M:%S}-{closes_at:%H:%M:%S}); entries stay DISARMED. "
+                f"Exits and monitoring continue."
+            )
+            return
+
+        fire_after = mono_ns() + int(max(0.0, (opens_at - now).total_seconds()) * 1e9)
+        deadline = mono_ns() + int((closes_at - now).total_seconds() * 1e9)
         self.feed.enable_entries(
             fire_after_ns=fire_after, deadline_ns=deadline,
             session_prefix=f"sig_{now.strftime('%Y%m%d')}_",
         )
-        self.log.info("TRADING armed")
+        self.log.info(
+            f"TRADING armed - entries {opens_at:%H:%M:%S} to {closes_at:%H:%M:%S}")
 
     def square_off(self) -> None:
         self.feed.disarm()
