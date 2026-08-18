@@ -7,7 +7,15 @@
  */
 import { create } from 'zustand'
 
-export type Theme = 'dark' | 'light'
+export type Theme = 'dark' | 'light' | 'charcoal' | 'ivory'
+
+/** Order shown in Settings -> Appearance. Label first, token second. */
+export const THEMES: { id: Theme; label: string }[] = [
+  { id: 'dark', label: 'Dark' },
+  { id: 'light', label: 'Light' },
+  { id: 'charcoal', label: 'Charcoal' },
+  { id: 'ivory', label: 'Ivory' },
+]
 export type GreetMode = 'rotate' | 'fixed'
 
 export const ACCENTS: { label: string; value: string }[] = [

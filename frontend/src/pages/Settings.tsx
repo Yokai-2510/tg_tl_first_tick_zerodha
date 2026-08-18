@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ApiError, api } from '../lib/api'
 import { CREDENTIAL_GROUPS, SETTINGS } from '../lib/sections'
-import { ACCENTS, GREETINGS, usePrefs, type GreetMode, type Theme } from '../lib/prefs'
+import { ACCENTS, GREETINGS, THEMES, usePrefs, type GreetMode } from '../lib/prefs'
 import { MONO, V, badge, cardTitleLg, ellip, seg, segTrack } from '../lib/style'
 import { useStore } from '../lib/store'
 import { toast } from '../lib/toast'
@@ -47,12 +47,12 @@ function Appearance() {
           sub="Saved in this browser, not on the server, so two operators on the same backend can each have their own."
         />
         <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 22 }}>
-          <Setting k="Theme" help="Dark is the default — this console is read for hours during a session.">
+          <Setting k="Theme" help="Dark is the default — this console is read for hours during a session. Charcoal and Ivory are the low-contrast pair.">
             <div style={{ ...segTrack, padding: 3 }}>
-              {(['dark', 'light'] as Theme[]).map((t) => (
-                <button key={t} onClick={() => set('theme', t)}
-                  style={{ ...seg(theme === t), padding: '6px 16px', textTransform: 'capitalize' }}>
-                  {t}
+              {THEMES.map((t) => (
+                <button key={t.id} onClick={() => set('theme', t.id)}
+                  style={{ ...seg(theme === t.id), padding: '6px 14px' }}>
+                  {t.label}
                 </button>
               ))}
             </div>

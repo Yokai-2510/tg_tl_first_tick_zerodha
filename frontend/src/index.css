@@ -50,6 +50,52 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
+/* Charcoal + Slate + Desaturated Teal + Sage + Dusty Burgundy.
+   A quieter dark for long sessions: lower contrast surfaces, and pos/neg carried
+   by sage and dusty burgundy rather than saturated green and red. */
+:root[data-theme='charcoal'] {
+  --page: #171B1D;
+  --card: #202629;
+  --sunken: #1b2124;
+  --border: #283136;
+  --border2: #354147;
+  --text: #e6ebec;
+  --muted: #93a1a5;
+  --faint: #6b787d;
+  --pos: #719B7D;
+  --neg: #A86F6F;
+  --warn: #c9a06a;
+  --posbg: #1d2724;
+  --negbg: #271e1f;
+  --warnbg: #26211a;
+  --chip: #283136;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --accent: #4F8F89;
+}
+
+/* Warm Ivory + Gray-Green + Deep Teal + Sage + Burgundy.
+   The light counterpart: paper-toned surfaces instead of blue-white, so the two
+   can be switched between without the eye having to re-adjust. */
+:root[data-theme='ivory'] {
+  --page: #F2F1EC;
+  --card: #E9E8E2;
+  --sunken: #ecebe6;
+  --border: #DEDFDA;
+  --border2: #cdcfc8;
+  --text: #1e2422;
+  --muted: #5f6a66;
+  --faint: #8a938f;
+  --pos: #557D62;
+  --neg: #956361;
+  --warn: #9a7736;
+  --posbg: #e3ebe4;
+  --negbg: #f0e4e3;
+  --warnbg: #efe8da;
+  --chip: #DEDFDA;
+  --shadow: 0 1px 2px rgba(30, 36, 34, 0.06), 0 4px 12px rgba(30, 36, 34, 0.04);
+  --accent: #477A76;
+}
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 
